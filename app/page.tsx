@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { buildPortfolioSummary, formatMoney, formatNumber } from "@/lib/calculations";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 import type { Dividend, DividendAllocation, Member, Security, Trade } from "@/lib/types";
@@ -65,6 +65,7 @@ export default function Home() {
   const [tradeFees, setTradeFees] = useState("");
   const [tradeNotes, setTradeNotes] = useState("");
   const [tradeAllocations, setTradeAllocations] = useState<Record<string, string>>({});
+  const [editingTradeId, setEditingTradeId] = useState<string | null>(null);
 
   const [dividendSecurityId, setDividendSecurityId] = useState("");
   const [dividendDate, setDividendDate] = useState(today);
@@ -72,6 +73,7 @@ export default function Home() {
   const [dividendTax, setDividendTax] = useState("");
   const [dividendNotes, setDividendNotes] = useState("");
   const [dividendAllocations, setDividendAllocations] = useState<Record<string, string>>({});
+  const [editingDividendId, setEditingDividendId] = useState<string | null>(null);
 
   const summary = useMemo(
     () => buildPortfolioSummary(members, securities, trades, dividends),
@@ -164,7 +166,19 @@ export default function Home() {
     setDividendAllocations(Object.fromEntries(members.map((member) => [member.id, String(share)])));
   }
 
-  async function addTrade(event: FormEvent) {
+  function resetTradeForm() {
+    setEditingTradeId(null);
+    setTradeSecurityId("");
+    setTradeDate(today);
+    setTradeType("buy");
+    setTradeQuantity("");
+    setTradePrice("");
+    setTradeFees("");
+    setTradeNotes("");
+    setTradeAllocations({});
+  }
+
+  async function saveTrade(event: FormEvent) {
     event.preventDefault();
     if (!supabase || !tradeSecurityId) return;
 
@@ -179,7 +193,7 @@ export default function Home() {
       return;
     }
 
-    const { error } = await supabase.from("trades").insert({
+    const trade = {
       security_id: tradeSecurityId,
       trade_date: tradeDate,
       type: tradeType,
@@ -188,18 +202,27 @@ export default function Home() {
       fees: numeric(tradeFees),
       allocations,
       notes: tradeNotes.trim() || null
-    });
+    };
+    const { error } = editingTradeId
+      ? await supabase.from("trades").update(trade).eq("id", editingTradeId)
+      : await supabase.from("trades").insert(trade);
 
     if (error) return setMessage(error.message);
-    setTradeQuantity("");
-    setTradePrice("");
-    setTradeFees("");
-    setTradeNotes("");
-    setTradeAllocations({});
+    resetTradeForm();
     await loadData();
   }
 
-  async function addDividend(event: FormEvent) {
+  function resetDividendForm() {
+    setEditingDividendId(null);
+    setDividendSecurityId("");
+    setDividendDate(today);
+    setGrossDividend("");
+    setDividendTax("");
+    setDividendNotes("");
+    setDividendAllocations({});
+  }
+
+  async function saveDividend(event: FormEvent) {
     event.preventDefault();
     if (!supabase || !dividendSecurityId) return;
 
@@ -214,20 +237,51 @@ export default function Home() {
       return;
     }
 
-    const { error } = await supabase.from("dividends").insert({
+    const dividend = {
       security_id: dividendSecurityId,
       dividend_date: dividendDate,
       gross_amount: numeric(grossDividend),
       tax: numeric(dividendTax),
       allocations,
       notes: dividendNotes.trim() || null
-    });
+    };
+    const { error } = editingDividendId
+      ? await supabase.from("dividends").update(dividend).eq("id", editingDividendId)
+      : await supabase.from("dividends").insert(dividend);
 
     if (error) return setMessage(error.message);
-    setGrossDividend("");
-    setDividendTax("");
-    setDividendNotes("");
-    setDividendAllocations({});
+    resetDividendForm();
+    await loadData();
+  }
+
+  function editTrade(trade: Trade) {
+    setEditingTradeId(trade.id);
+    setTradeSecurityId(trade.security_id);
+    setTradeDate(trade.trade_date);
+    setTradeType(trade.type);
+    setTradeQuantity(String(trade.quantity));
+    setTradePrice(String(trade.price));
+    setTradeFees(String(trade.fees));
+    setTradeNotes(trade.notes ?? "");
+    setTradeAllocations(Object.fromEntries(trade.allocations.map((item) => [item.member_id, String(item.quantity)])));
+  }
+
+  function editDividend(dividend: Dividend) {
+    setEditingDividendId(dividend.id);
+    setDividendSecurityId(dividend.security_id);
+    setDividendDate(dividend.dividend_date);
+    setGrossDividend(String(dividend.gross_amount));
+    setDividendTax(String(dividend.tax));
+    setDividendNotes(dividend.notes ?? "");
+    setDividendAllocations(Object.fromEntries(dividend.allocations.map((item) => [item.member_id, String(item.amount)])));
+  }
+
+  async function deleteHistoryItem(table: "trades" | "dividends", id: string) {
+    if (!supabase || !window.confirm("Delete this record? This cannot be undone.")) return;
+    const { error } = await supabase.from(table).delete().eq("id", id);
+    if (error) return setMessage(error.message);
+    if (table === "trades" && editingTradeId === id) resetTradeForm();
+    if (table === "dividends" && editingDividendId === id) resetDividendForm();
     await loadData();
   }
 
@@ -298,8 +352,8 @@ export default function Home() {
       </section>
 
       <section className="grid two">
-        <form className="panel" onSubmit={addTrade}>
-          <h2>Add trade</h2>
+        <form className="panel" onSubmit={saveTrade}>
+          <h2>{editingTradeId ? "Edit trade" : "Add trade"}</h2>
           <div className="row">
             <label>
               Counter
@@ -351,12 +405,15 @@ export default function Home() {
             Notes
             <input value={tradeNotes} onChange={(event) => setTradeNotes(event.target.value)} placeholder="Optional" />
           </label>
-          <button type="submit">Save trade</button>
+          <div className="form-actions">
+            <button type="submit">{editingTradeId ? "Update trade" : "Save trade"}</button>
+            {editingTradeId ? <button type="button" className="secondary" onClick={resetTradeForm}>Cancel</button> : null}
+          </div>
           {selectedTradeSecurity ? <p className="hint">Using {selectedTradeSecurity.currency} for this counter.</p> : null}
         </form>
 
-        <form className="panel" onSubmit={addDividend}>
-          <h2>Add dividend</h2>
+        <form className="panel" onSubmit={saveDividend}>
+          <h2>{editingDividendId ? "Edit dividend" : "Add dividend"}</h2>
           <div className="row">
             <label>
               Counter
@@ -395,9 +452,68 @@ export default function Home() {
             Notes
             <input value={dividendNotes} onChange={(event) => setDividendNotes(event.target.value)} placeholder="Optional" />
           </label>
-          <button type="submit">Save dividend</button>
+          <div className="form-actions">
+            <button type="submit">{editingDividendId ? "Update dividend" : "Save dividend"}</button>
+            {editingDividendId ? <button type="button" className="secondary" onClick={resetDividendForm}>Cancel</button> : null}
+          </div>
           {selectedDividendSecurity ? <p className="hint">Net dividend is gross minus tax.</p> : null}
         </form>
+      </section>
+
+      <section className="grid two">
+        <HistoryTable
+          title="Trade history"
+          emptyMessage="No trades recorded yet."
+          headers={["Date", "Counter", "Type", "Quantity", "Price", "Fees", "Allocation", "Notes", "Actions"]}
+          isEmpty={trades.length === 0}
+        >
+          {trades.map((trade) => {
+            const security = securities.find((item) => item.id === trade.security_id);
+            return (
+              <tr key={trade.id}>
+                <td>{trade.trade_date}</td>
+                <td>{security?.symbol ?? "Unknown"}</td>
+                <td className={trade.type === "buy" ? "" : "loss"}>{trade.type}</td>
+                <td>{formatNumber(trade.quantity)}</td>
+                <td>{formatMoney(trade.price, security?.currency)}</td>
+                <td>{formatMoney(trade.fees, security?.currency)}</td>
+                <td>{allocationSummary(trade.allocations, members, "quantity")}</td>
+                <td>{trade.notes || "—"}</td>
+                <td className="actions">
+                  <button type="button" className="secondary small" onClick={() => editTrade(trade)}>Edit</button>
+                  <button type="button" className="danger small" onClick={() => void deleteHistoryItem("trades", trade.id)}>Delete</button>
+                </td>
+              </tr>
+            );
+          })}
+        </HistoryTable>
+
+        <HistoryTable
+          title="Dividend history"
+          emptyMessage="No dividends recorded yet."
+          headers={["Date", "Counter", "Gross", "Tax", "Net", "Allocation", "Notes", "Actions"]}
+          isEmpty={dividends.length === 0}
+        >
+          {dividends.map((dividend) => {
+            const security = securities.find((item) => item.id === dividend.security_id);
+            const net = dividend.gross_amount - dividend.tax;
+            return (
+              <tr key={dividend.id}>
+                <td>{dividend.dividend_date}</td>
+                <td>{security?.symbol ?? "Unknown"}</td>
+                <td>{formatMoney(dividend.gross_amount, security?.currency)}</td>
+                <td>{formatMoney(dividend.tax, security?.currency)}</td>
+                <td>{formatMoney(net, security?.currency)}</td>
+                <td>{allocationSummary(dividend.allocations, members, "amount")}</td>
+                <td>{dividend.notes || "—"}</td>
+                <td className="actions">
+                  <button type="button" className="secondary small" onClick={() => editDividend(dividend)}>Edit</button>
+                  <button type="button" className="danger small" onClick={() => void deleteHistoryItem("dividends", dividend.id)}>Delete</button>
+                </td>
+              </tr>
+            );
+          })}
+        </HistoryTable>
       </section>
 
       <section className="panel">
@@ -516,6 +632,47 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function HistoryTable({
+  title,
+  headers,
+  emptyMessage,
+  isEmpty,
+  children
+}: {
+  title: string;
+  headers: string[];
+  emptyMessage: string;
+  isEmpty: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="panel history-panel">
+      <h2>{title}</h2>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr>
+          </thead>
+          <tbody>
+            {isEmpty ? <tr><td colSpan={headers.length} className="empty">{emptyMessage}</td></tr> : children}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function allocationSummary(
+  allocations: Array<{ member_id: string; quantity?: number; amount?: number }>,
+  members: Member[],
+  field: "quantity" | "amount"
+) {
+  return allocations.map((allocation) => {
+    const member = members.find((item) => item.id === allocation.member_id);
+    return `${member?.name ?? "Unknown"}: ${formatNumber(allocation[field] ?? 0)}`;
+  }).join(", ") || "—";
 }
 
 function AllocationInputs({
