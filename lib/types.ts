@@ -51,6 +51,27 @@ export type Dividend = {
   created_at?: string;
 };
 
+export type CashTransaction = {
+  id: string;
+  transaction_date: string;
+  type: "deposit" | "withdrawal";
+  amount: number;
+  reference: string | null;
+  created_by: string;
+  created_at?: string;
+};
+
+export type CashLedgerEntry = {
+  id: string;
+  date: string;
+  type: "deposit" | "withdrawal" | "buy" | "sell";
+  description: string;
+  debit: number;
+  credit: number;
+  runningBalance: number;
+  createdBy: string;
+};
+
 export type MemberPosition = {
   member: Member;
   security: Security;
@@ -100,4 +121,6 @@ export type PortfolioSummary = {
     totalPnLExcludingDividends: number;
     totalPnLIncludingDividends: number;
   };
+  cashBalance: number;
+  portfolioValue: number;
 };

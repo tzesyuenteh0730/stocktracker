@@ -217,6 +217,34 @@ button.small {
   gap: 8px;
 }
 
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cash-form-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ledger-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 220px));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.ledger-table {
+  min-width: 980px;
+}
+
+.capitalize {
+  text-transform: capitalize;
+}
+
 .hint {
   margin: 0;
   color: var(--muted);
@@ -343,6 +371,11 @@ th {
   .counter {
     grid-template-columns: 1fr;
   }
+
+  .cash-form-grid,
+  .ledger-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 560px) {
@@ -357,5 +390,14 @@ th {
 
   .date-selector {
     grid-template-columns: 72px minmax(0, 1fr) 84px;
+  }
+
+  .section-heading {
+    flex-direction: column;
+  }
+
+  .cash-form-grid,
+  .ledger-filters {
+    grid-template-columns: 1fr;
   }
 }

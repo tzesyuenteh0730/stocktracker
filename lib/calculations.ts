@@ -1,4 +1,6 @@
 import type {
+  CashLedgerEntry,
+  CashTransaction,
   Dividend,
   Member,
   MemberPosition,
@@ -30,7 +32,8 @@ export function buildPortfolioSummary(
   members: Member[],
   securities: Security[],
   trades: Trade[],
-  dividends: Dividend[]
+  dividends: Dividend[],
+  cashTransactions: CashTransaction[] = []
 ): PortfolioSummary {
   const memberMap = new Map(members.map((member) => [member.id, member]));
   const securityMap = new Map(securities.map((security) => [security.id, security]));
@@ -214,8 +217,62 @@ export function buildPortfolioSummary(
       a.security.symbol.localeCompare(b.security.symbol)
     ),
     totalsByMember: [...totalsByMember.values()].sort((a, b) => a.member.name.localeCompare(b.member.name)),
-    poolTotals
+    poolTotals,
+    cashBalance: calculateCashBalance(cashTransactions, trades),
+    portfolioValue: poolTotals.marketValue + calculateCashBalance(cashTransactions, trades)
   };
+}
+
+export function cashImpactForTrade(trade: Pick<Trade, "type" | "quantity" | "price" | "fees">) {
+  const tradeValue = money(trade.quantity) * money(trade.price);
+  return trade.type === "buy" ? -(tradeValue + money(trade.fees)) : tradeValue - money(trade.fees);
+}
+
+export function calculateCashBalance(cashTransactions: CashTransaction[], trades: Trade[]) {
+  const manualCash = cashTransactions.reduce(
+    (balance, transaction) => balance + (transaction.type === "deposit" ? money(transaction.amount) : -money(transaction.amount)),
+    0
+  );
+  return manualCash + trades.reduce((balance, trade) => balance + cashImpactForTrade(trade), 0);
+}
+
+export function buildCashLedger(
+  cashTransactions: CashTransaction[],
+  trades: Trade[],
+  securities: Security[]
+): CashLedgerEntry[] {
+  const securityMap = new Map(securities.map((security) => [security.id, security]));
+  const entries = [
+    ...cashTransactions.map((transaction): Omit<CashLedgerEntry, "runningBalance"> => ({
+      id: `cash:${transaction.id}`,
+      date: transaction.transaction_date,
+      type: transaction.type,
+      description: transaction.reference || (transaction.type === "deposit" ? "Cash deposit" : "Cash withdrawal"),
+      debit: transaction.type === "withdrawal" ? money(transaction.amount) : 0,
+      credit: transaction.type === "deposit" ? money(transaction.amount) : 0,
+      createdBy: transaction.created_by || "Manual entry"
+    })),
+    ...trades.map((trade): Omit<CashLedgerEntry, "runningBalance"> => {
+      const security = securityMap.get(trade.security_id);
+      const amount = Math.abs(cashImpactForTrade(trade));
+      const isBuy = trade.type === "buy";
+      return {
+        id: `trade:${trade.id}`,
+        date: trade.trade_date,
+        type: trade.type,
+        description: `${isBuy ? "Buy" : "Sell"} ${trade.quantity} ${security?.symbol ?? "counter"}${trade.notes ? ` — ${trade.notes}` : ""}`,
+        debit: isBuy ? amount : 0,
+        credit: isBuy ? 0 : amount,
+        createdBy: "Trade entry"
+      };
+    })
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+
+  let runningBalance = 0;
+  return entries.map((entry) => {
+    runningBalance += entry.credit - entry.debit;
+    return { ...entry, runningBalance };
+  });
 }
 
 export function formatMoney(value: number, currency = "MYR") {

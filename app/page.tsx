@@ -1,9 +1,9 @@
 "use client";
 
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
-import { buildPortfolioSummary, formatMoney, formatNumber } from "@/lib/calculations";
+import { buildCashLedger, buildPortfolioSummary, cashImpactForTrade, formatMoney, formatNumber } from "@/lib/calculations";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
-import type { Dividend, DividendAllocation, Member, Security, Trade } from "@/lib/types";
+import type { CashTransaction, Dividend, DividendAllocation, Member, Security, Trade } from "@/lib/types";
 
 const today = new Date().toISOString().slice(0, 10);
 const monthNames = [
@@ -45,11 +45,19 @@ const normalizeDividend = (row: Dividend): Dividend => ({
   notes: row.notes ?? null
 });
 
+const normalizeCashTransaction = (row: CashTransaction): CashTransaction => ({
+  ...row,
+  amount: numeric(row.amount),
+  reference: row.reference ?? null,
+  created_by: row.created_by || "Manual entry"
+});
+
 export default function Home() {
   const [members, setMembers] = useState<Member[]>([]);
   const [securities, setSecurities] = useState<Security[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [dividends, setDividends] = useState<Dividend[]>([]);
+  const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [message, setMessage] = useState("");
 
@@ -79,9 +87,27 @@ export default function Home() {
   const [dividendAllocations, setDividendAllocations] = useState<Record<string, string>>({});
   const [editingDividendId, setEditingDividendId] = useState<string | null>(null);
 
+  const [cashDate, setCashDate] = useState(today);
+  const [cashType, setCashType] = useState<"deposit" | "withdrawal">("deposit");
+  const [cashAmount, setCashAmount] = useState("");
+  const [cashReference, setCashReference] = useState("");
+  const [cashCreatedBy, setCashCreatedBy] = useState("Manual entry");
+  const [ledgerStartDate, setLedgerStartDate] = useState("");
+  const [ledgerEndDate, setLedgerEndDate] = useState("");
+  const [ledgerType, setLedgerType] = useState<"all" | "deposit" | "withdrawal" | "buy" | "sell">("all");
+
   const summary = useMemo(
-    () => buildPortfolioSummary(members, securities, trades, dividends),
-    [members, securities, trades, dividends]
+    () => buildPortfolioSummary(members, securities, trades, dividends, cashTransactions),
+    [members, securities, trades, dividends, cashTransactions]
+  );
+  const cashLedger = useMemo(
+    () => buildCashLedger(cashTransactions, trades, securities),
+    [cashTransactions, trades, securities]
+  );
+  const filteredCashLedger = cashLedger.filter((entry) =>
+    (!ledgerStartDate || entry.date >= ledgerStartDate) &&
+    (!ledgerEndDate || entry.date <= ledgerEndDate) &&
+    (ledgerType === "all" || entry.type === ledgerType)
   );
 
   const selectedTradeSecurity = securities.find((security) => security.id === tradeSecurityId);
@@ -92,14 +118,15 @@ export default function Home() {
     setLoadState("loading");
     setMessage("");
 
-    const [membersResult, securitiesResult, tradesResult, dividendsResult] = await Promise.all([
+    const [membersResult, securitiesResult, tradesResult, dividendsResult, cashResult] = await Promise.all([
       supabase.from("members").select("*").order("created_at", { ascending: true }),
       supabase.from("securities").select("*").order("symbol", { ascending: true }),
       supabase.from("trades").select("*").order("trade_date", { ascending: false }),
-      supabase.from("dividends").select("*").order("dividend_date", { ascending: false })
+      supabase.from("dividends").select("*").order("dividend_date", { ascending: false }),
+      supabase.from("cash_transactions").select("*").order("transaction_date", { ascending: false })
     ]);
 
-    const error = membersResult.error ?? securitiesResult.error ?? tradesResult.error ?? dividendsResult.error;
+    const error = membersResult.error ?? securitiesResult.error ?? tradesResult.error ?? dividendsResult.error ?? cashResult.error;
     if (error) {
       setLoadState("error");
       setMessage(error.message);
@@ -110,6 +137,7 @@ export default function Home() {
     setSecurities((securitiesResult.data ?? []).map(normalizeSecurity));
     setTrades((tradesResult.data ?? []).map(normalizeTrade));
     setDividends((dividendsResult.data ?? []).map(normalizeDividend));
+    setCashTransactions((cashResult.data ?? []).map(normalizeCashTransaction));
     setLoadState("ready");
   }
 
@@ -207,12 +235,46 @@ export default function Home() {
       allocations,
       notes: tradeNotes.trim() || null
     };
+
+    const existingTrade = editingTradeId ? trades.find((item) => item.id === editingTradeId) : undefined;
+    const balanceBeforeSave = summary.cashBalance - (existingTrade ? cashImpactForTrade(existingTrade) : 0);
+    if (balanceBeforeSave + cashImpactForTrade(trade) < -0.0001) {
+      setMessage("Insufficient cash balance for this trade.");
+      return;
+    }
     const { error } = editingTradeId
       ? await supabase.from("trades").update(trade).eq("id", editingTradeId)
       : await supabase.from("trades").insert(trade);
 
     if (error) return setMessage(error.message);
     resetTradeForm();
+    await loadData();
+  }
+
+  async function addCashTransaction(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase) return;
+
+    const amount = numeric(cashAmount);
+    if (amount <= 0) {
+      setMessage("Enter a cash amount greater than zero.");
+      return;
+    }
+    if (cashType === "withdrawal" && summary.cashBalance - amount < -0.0001) {
+      setMessage("Insufficient cash balance for this withdrawal.");
+      return;
+    }
+
+    const { error } = await supabase.from("cash_transactions").insert({
+      transaction_date: cashDate,
+      type: cashType,
+      amount,
+      reference: cashReference.trim() || null,
+      created_by: cashCreatedBy.trim() || "Manual entry"
+    });
+    if (error) return setMessage(error.message);
+    setCashAmount("");
+    setCashReference("");
     await loadData();
   }
 
@@ -311,7 +373,9 @@ export default function Home() {
       {message ? <section className="notice error">{message}</section> : null}
 
       <section className="metrics">
-        <Metric label="Pool holding" value={formatMoney(summary.poolTotals.marketValue)} />
+        <Metric label="Stock holdings" value={formatMoney(summary.poolTotals.marketValue)} />
+        <Metric label="Cash balance" value={formatMoney(summary.cashBalance)} />
+        <Metric label="Portfolio value" value={formatMoney(summary.portfolioValue)} />
         <Metric label="Cost basis" value={formatMoney(summary.poolTotals.costBasis)} />
         <Metric label="P/L excl. dividend" value={formatMoney(summary.poolTotals.totalPnLExcludingDividends)} />
         <Metric label="P/L incl. dividend" value={formatMoney(summary.poolTotals.totalPnLIncludingDividends)} />
@@ -350,6 +414,43 @@ export default function Home() {
           </table>
         </div>
       </section>
+
+      <form className="panel cash-form" onSubmit={addCashTransaction}>
+        <div className="section-heading">
+          <div>
+            <h2>Cash account</h2>
+            <p className="hint">Current balance: {formatMoney(summary.cashBalance)}</p>
+          </div>
+        </div>
+        <div className="cash-form-grid">
+          <label>
+            Transaction date
+            <DateSelector value={cashDate} onChange={setCashDate} />
+          </label>
+          <label>
+            Type
+            <select value={cashType} onChange={(event) => setCashType(event.target.value as "deposit" | "withdrawal")}>
+              <option value="deposit">Deposit</option>
+              <option value="withdrawal">Withdrawal</option>
+            </select>
+          </label>
+          <label>
+            Amount
+            <input inputMode="decimal" value={cashAmount} onChange={(event) => setCashAmount(event.target.value)} placeholder="0.00" />
+          </label>
+          <label>
+            Reference / remarks
+            <input value={cashReference} onChange={(event) => setCashReference(event.target.value)} placeholder="Opening capital" />
+          </label>
+          <label>
+            Created by
+            <input value={cashCreatedBy} onChange={(event) => setCashCreatedBy(event.target.value)} placeholder="Manual entry" />
+          </label>
+        </div>
+        <div className="form-actions">
+          <button type="submit">Record {cashType === "deposit" ? "deposit" : "withdrawal"}</button>
+        </div>
+      </form>
 
       <section className="grid two">
         <form className="panel" onSubmit={addMember}>
@@ -555,7 +656,10 @@ export default function Home() {
       </section>
 
       <section className="panel">
-        <h2>Stock counters</h2>
+        <div className="section-heading">
+          <h2>Stock counters</h2>
+          <strong>Cash balance: {formatMoney(summary.cashBalance)}</strong>
+        </div>
         <div className="counter-list">
           {summary.securitySummaries.map((row) => (
             <div className="counter" key={row.security.id}>
@@ -599,29 +703,93 @@ export default function Home() {
                 <th>Member</th>
                 <th>Qty</th>
                 <th>Cost</th>
-                <th>Value</th>
+                <th>Value @ weighted cost</th>
                 <th>Dividend</th>
                 <th>P/L excl.</th>
                 <th>P/L incl.</th>
               </tr>
             </thead>
             <tbody>
-              {summary.memberPositions.map((position) => (
-                <tr key={`${position.security.id}:${position.member.id}`}>
-                  <td>{position.security.symbol}</td>
-                  <td>{position.member.name}</td>
-                  <td>{formatNumber(position.quantity)}</td>
-                  <td>{formatMoney(position.costBasis, position.security.currency)}</td>
-                  <td>{formatMoney(position.marketValue, position.security.currency)}</td>
-                  <td>{formatMoney(position.dividends, position.security.currency)}</td>
-                  <td className={tone(position.totalPnLExcludingDividends)}>
-                    {formatMoney(position.totalPnLExcludingDividends, position.security.currency)}
-                  </td>
-                  <td className={tone(position.totalPnLIncludingDividends)}>
-                    {formatMoney(position.totalPnLIncludingDividends, position.security.currency)}
-                  </td>
+              {summary.memberPositions.map((position) => {
+                const counter = summary.securitySummaries.find((item) => item.security.id === position.security.id);
+                const valueAtWeightedCost = position.quantity * (counter?.costPricePerUnit ?? 0);
+                return (
+                  <tr key={`${position.security.id}:${position.member.id}`}>
+                    <td>{position.security.symbol}</td>
+                    <td>{position.member.name}</td>
+                    <td>{formatNumber(position.quantity)}</td>
+                    <td>{formatMoney(position.costBasis, position.security.currency)}</td>
+                    <td>{formatMoney(valueAtWeightedCost, position.security.currency)}</td>
+                    <td>{formatMoney(position.dividends, position.security.currency)}</td>
+                    <td className={tone(position.totalPnLExcludingDividends)}>
+                      {formatMoney(position.totalPnLExcludingDividends, position.security.currency)}
+                    </td>
+                    <td className={tone(position.totalPnLIncludingDividends)}>
+                      {formatMoney(position.totalPnLIncludingDividends, position.security.currency)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel cash-ledger">
+        <div className="section-heading">
+          <div>
+            <h2>Cash ledger</h2>
+            <p className="hint">Cash statement showing deposits, withdrawals, and trade cash movements.</p>
+          </div>
+          <strong>Balance: {formatMoney(summary.cashBalance)}</strong>
+        </div>
+        <div className="ledger-filters">
+          <label>
+            From
+            <DateSelector value={ledgerStartDate} onChange={setLedgerStartDate} allowEmpty />
+          </label>
+          <label>
+            To
+            <DateSelector value={ledgerEndDate} onChange={setLedgerEndDate} allowEmpty />
+          </label>
+          <label>
+            Transaction type
+            <select value={ledgerType} onChange={(event) => setLedgerType(event.target.value as typeof ledgerType)}>
+              <option value="all">All movements</option>
+              <option value="deposit">Deposit</option>
+              <option value="withdrawal">Withdrawal</option>
+              <option value="buy">Buy trade</option>
+              <option value="sell">Sell trade</option>
+            </select>
+          </label>
+        </div>
+        <div className="table-wrap">
+          <table className="ledger-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Transaction type</th>
+                <th>Description</th>
+                <th>Created by</th>
+                <th>Debit</th>
+                <th>Credit</th>
+                <th>Running balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredCashLedger.length ? filteredCashLedger.map((entry) => (
+                <tr key={entry.id}>
+                  <td>{entry.date}</td>
+                  <td className="capitalize">{entry.type === "buy" || entry.type === "sell" ? `${entry.type} trade` : entry.type}</td>
+                  <td>{entry.description}</td>
+                  <td>{entry.createdBy}</td>
+                  <td>{entry.debit ? formatMoney(entry.debit) : "—"}</td>
+                  <td>{entry.credit ? formatMoney(entry.credit) : "—"}</td>
+                  <td className={tone(entry.runningBalance)}>{formatMoney(entry.runningBalance)}</td>
                 </tr>
-              ))}
+              )) : (
+                <tr><td colSpan={7} className="empty">No cash movements match these filters.</td></tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -680,12 +848,20 @@ function allocationSummary(
   }).join(", ") || "—";
 }
 
-function DateSelector({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const [yearValue, monthValue, dayValue] = value.split("-").map(Number);
+function DateSelector({
+  value,
+  onChange,
+  allowEmpty = false
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  allowEmpty?: boolean;
+}) {
+  const [yearValue, monthValue, dayValue] = value ? value.split("-").map(Number) : [];
   const currentYear = new Date().getFullYear();
-  const year = Number.isFinite(yearValue) ? yearValue : currentYear;
-  const month = Number.isFinite(monthValue) ? monthValue : 1;
-  const day = Number.isFinite(dayValue) ? dayValue : 1;
+  const year = Number.isFinite(yearValue) && yearValue > 0 ? yearValue : currentYear;
+  const month = Number.isFinite(monthValue) && monthValue >= 1 && monthValue <= 12 ? monthValue : 1;
+  const day = Number.isFinite(dayValue) && dayValue >= 1 ? dayValue : 1;
   const years = Array.from(new Set([year, ...Array.from({ length: 22 }, (_, index) => currentYear + 1 - index)])).sort((a, b) => b - a);
   const daysInMonth = new Date(year, month, 0).getDate();
 
@@ -696,7 +872,12 @@ function DateSelector({ value, onChange }: { value: string; onChange: (value: st
 
   return (
     <div className="date-selector">
-      <select aria-label="Day" value={day} onChange={(event) => updateDate(year, month, Number(event.target.value))}>
+      <select
+        aria-label="Day"
+        value={value ? day : ""}
+        onChange={(event) => event.target.value ? updateDate(year, month, Number(event.target.value)) : onChange("")}
+      >
+        {allowEmpty ? <option value="">Any date</option> : null}
         {Array.from({ length: daysInMonth }, (_, index) => index + 1).map((option) => <option key={option} value={option}>{option}</option>)}
       </select>
       <select aria-label="Month" value={month} onChange={(event) => updateDate(year, Number(event.target.value), day)}>

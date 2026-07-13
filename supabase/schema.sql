@@ -41,8 +41,19 @@ create table if not exists dividends (
   created_at timestamptz not null default now()
 );
 
+create table if not exists cash_transactions (
+  id uuid primary key default gen_random_uuid(),
+  transaction_date date not null,
+  type text not null check (type in ('deposit', 'withdrawal')),
+  amount numeric(18, 6) not null check (amount > 0),
+  reference text,
+  created_by text not null default 'Manual entry',
+  created_at timestamptz not null default now()
+);
+
 create index if not exists trades_security_date_idx on trades(security_id, trade_date);
 create index if not exists dividends_security_date_idx on dividends(security_id, dividend_date);
+create index if not exists cash_transactions_date_idx on cash_transactions(transaction_date);
 
 -- This app is intentionally simple and client-only. For a private personal tracker,
 -- keep the Supabase project URL/anon key private in Vercel and do not share the app URL.
