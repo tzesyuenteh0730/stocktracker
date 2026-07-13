@@ -313,6 +313,40 @@ export default function Home() {
         <Metric label="P/L incl. dividend" value={formatMoney(summary.poolTotals.totalPnLIncludingDividends)} />
       </section>
 
+      <section className="panel">
+        <h2>Member pool holding</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Member</th>
+                <th>Holding</th>
+                <th>Cost</th>
+                <th>Realized</th>
+                <th>Unrealized</th>
+                <th>Dividend</th>
+                <th>P/L excl.</th>
+                <th>P/L incl.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.totalsByMember.map((row) => (
+                <tr key={row.member.id}>
+                  <td>{row.member.name}</td>
+                  <td>{formatMoney(row.marketValue)}</td>
+                  <td>{formatMoney(row.costBasis)}</td>
+                  <td className={tone(row.realizedPnL)}>{formatMoney(row.realizedPnL)}</td>
+                  <td className={tone(row.unrealizedPnL)}>{formatMoney(row.unrealizedPnL)}</td>
+                  <td>{formatMoney(row.dividends)}</td>
+                  <td className={tone(row.totalPnLExcludingDividends)}>{formatMoney(row.totalPnLExcludingDividends)}</td>
+                  <td className={tone(row.totalPnLIncludingDividends)}>{formatMoney(row.totalPnLIncludingDividends)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section className="grid two">
         <form className="panel" onSubmit={addMember}>
           <h2>Add member</h2>
@@ -460,7 +494,7 @@ export default function Home() {
         </form>
       </section>
 
-      <section className="grid two">
+      <section className="grid two history-section">
         <HistoryTable
           title="Trade history"
           emptyMessage="No trades recorded yet."
@@ -514,40 +548,6 @@ export default function Home() {
             );
           })}
         </HistoryTable>
-      </section>
-
-      <section className="panel">
-        <h2>Member pool holding</h2>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Member</th>
-                <th>Holding</th>
-                <th>Cost</th>
-                <th>Realized</th>
-                <th>Unrealized</th>
-                <th>Dividend</th>
-                <th>P/L excl.</th>
-                <th>P/L incl.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.totalsByMember.map((row) => (
-                <tr key={row.member.id}>
-                  <td>{row.member.name}</td>
-                  <td>{formatMoney(row.marketValue)}</td>
-                  <td>{formatMoney(row.costBasis)}</td>
-                  <td className={tone(row.realizedPnL)}>{formatMoney(row.realizedPnL)}</td>
-                  <td className={tone(row.unrealizedPnL)}>{formatMoney(row.unrealizedPnL)}</td>
-                  <td>{formatMoney(row.dividends)}</td>
-                  <td className={tone(row.totalPnLExcludingDividends)}>{formatMoney(row.totalPnLExcludingDividends)}</td>
-                  <td className={tone(row.totalPnLIncludingDividends)}>{formatMoney(row.totalPnLIncludingDividends)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </section>
 
       <section className="panel">

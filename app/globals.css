@@ -32,6 +32,12 @@ select {
   width: min(1400px, calc(100% - 32px));
   margin: 0 auto;
   padding: 24px 0 48px;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-section {
+  order: 1;
 }
 
 .topbar {
