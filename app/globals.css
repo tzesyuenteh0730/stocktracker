@@ -166,6 +166,16 @@ select {
   padding: 8px 10px;
 }
 
+.date-selector {
+  display: grid;
+  grid-template-columns: 74px minmax(110px, 1fr) 88px;
+  gap: 6px;
+}
+
+.date-selector select {
+  min-width: 0;
+}
+
 button {
   min-height: 40px;
   border: 0;
@@ -343,5 +353,9 @@ th {
 
   .row {
     grid-template-columns: 1fr;
+  }
+
+  .date-selector {
+    grid-template-columns: 72px minmax(0, 1fr) 84px;
   }
 }

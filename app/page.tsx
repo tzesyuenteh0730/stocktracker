@@ -6,6 +6,10 @@ import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 import type { Dividend, DividendAllocation, Member, Security, Trade } from "@/lib/types";
 
 const today = new Date().toISOString().slice(0, 10);
+const monthNames = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+];
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
@@ -411,7 +415,7 @@ export default function Home() {
           <div className="row">
             <label>
               Date
-              <input type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} />
+              <DateSelector value={tradeDate} onChange={setTradeDate} />
             </label>
             <label>
               Quantity
@@ -462,7 +466,7 @@ export default function Home() {
             </label>
             <label>
               Date
-              <input type="date" value={dividendDate} onChange={(event) => setDividendDate(event.target.value)} />
+              <DateSelector value={dividendDate} onChange={setDividendDate} />
             </label>
           </div>
           <div className="row">
@@ -673,6 +677,35 @@ function allocationSummary(
     const member = members.find((item) => item.id === allocation.member_id);
     return `${member?.name ?? "Unknown"}: ${formatNumber(allocation[field] ?? 0)}`;
   }).join(", ") || "—";
+}
+
+function DateSelector({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [yearValue, monthValue, dayValue] = value.split("-").map(Number);
+  const currentYear = new Date().getFullYear();
+  const year = Number.isFinite(yearValue) ? yearValue : currentYear;
+  const month = Number.isFinite(monthValue) ? monthValue : 1;
+  const day = Number.isFinite(dayValue) ? dayValue : 1;
+  const years = Array.from(new Set([year, ...Array.from({ length: 22 }, (_, index) => currentYear + 1 - index)])).sort((a, b) => b - a);
+  const daysInMonth = new Date(year, month, 0).getDate();
+
+  const updateDate = (nextYear: number, nextMonth: number, nextDay: number) => {
+    const safeDay = Math.min(nextDay, new Date(nextYear, nextMonth, 0).getDate());
+    onChange(`${nextYear}-${String(nextMonth).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`);
+  };
+
+  return (
+    <div className="date-selector">
+      <select aria-label="Day" value={day} onChange={(event) => updateDate(year, month, Number(event.target.value))}>
+        {Array.from({ length: daysInMonth }, (_, index) => index + 1).map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+      <select aria-label="Month" value={month} onChange={(event) => updateDate(year, Number(event.target.value), day)}>
+        {monthNames.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
+      </select>
+      <select aria-label="Year" value={year} onChange={(event) => updateDate(Number(event.target.value), month, day)}>
+        {years.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </div>
+  );
 }
 
 function AllocationInputs({
