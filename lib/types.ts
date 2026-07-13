@@ -67,6 +67,7 @@ export type MemberPosition = {
 export type SecuritySummary = {
   security: Security;
   quantity: number;
+  costPricePerUnit: number;
   costBasis: number;
   marketValue: number;
   realizedPnL: number;

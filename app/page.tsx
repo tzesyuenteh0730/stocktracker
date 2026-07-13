@@ -571,6 +571,7 @@ export default function Home() {
                   onBlur={(event) => updateSecurity(row.security, { current_price: numeric(event.target.value) })}
                 />
               </label>
+              <span>Weighted cost/unit: {formatMoney(row.costPricePerUnit, row.security.currency)}</span>
               <span>{formatNumber(row.quantity)} shares</span>
               <span>{formatMoney(row.marketValue, row.security.currency)}</span>
               <span className={tone(row.totalPnLIncludingDividends)}>

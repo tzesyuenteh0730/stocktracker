@@ -312,7 +312,7 @@ th {
 
 .counter {
   display: grid;
-  grid-template-columns: 1.3fr 150px repeat(3, minmax(120px, 1fr)) 90px;
+  grid-template-columns: 1.3fr 150px repeat(4, minmax(120px, 1fr)) 90px;
   gap: 12px;
   align-items: center;
   border: 1px solid var(--line);

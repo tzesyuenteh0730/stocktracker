@@ -36,6 +36,18 @@ export function buildPortfolioSummary(
   const securityMap = new Map(securities.map((security) => [security.id, security]));
   const lots = new Map<string, RunningLot>();
   const dividendTotals = new Map<string, number>();
+  const buyTotalsBySecurity = new Map<string, { quantity: number; value: number }>();
+
+  // This counter-level metric intentionally uses every buy trade, independent of
+  // member allocations, fees, sales, and member cost-basis calculations.
+  for (const trade of trades) {
+    if (trade.type !== "buy" || !securityMap.has(trade.security_id) || trade.quantity <= 0) continue;
+
+    const total = buyTotalsBySecurity.get(trade.security_id) ?? { quantity: 0, value: 0 };
+    total.quantity += trade.quantity;
+    total.value += trade.quantity * trade.price;
+    buyTotalsBySecurity.set(trade.security_id, total);
+  }
 
   const keyFor = (securityId: string, memberId: string) => `${securityId}:${memberId}`;
   const getLot = (securityId: string, memberId: string) => {
@@ -152,6 +164,10 @@ export function buildPortfolioSummary(
       ({
         security: position.security,
         quantity: 0,
+        costPricePerUnit: (() => {
+          const buys = buyTotalsBySecurity.get(position.security.id);
+          return buys && buys.quantity > 0 ? buys.value / buys.quantity : 0;
+        })(),
         isEffectivelyClosed: false,
         ...emptyTotals()
       } satisfies SecuritySummary);
