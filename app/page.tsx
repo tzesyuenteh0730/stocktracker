@@ -45,6 +45,12 @@ const normalizeDividend = (row: Dividend): Dividend => ({
   type: row.type ?? "cash",
   gross_amount: numeric(row.gross_amount),
   tax: numeric(row.tax),
+  warrant_code: row.warrant_code ?? null,
+  bonus_ratio: row.bonus_ratio ?? null,
+  warrant_quantity_received: row.warrant_quantity_received == null ? null : numeric(row.warrant_quantity_received),
+  exercise_price: row.exercise_price == null ? null : numeric(row.exercise_price),
+  market_price: row.market_price == null ? null : numeric(row.market_price),
+  expiry_date: row.expiry_date ?? null,
   allocations: row.allocations ?? [],
   notes: row.notes ?? null
 });
@@ -89,6 +95,12 @@ export default function Home() {
   const [grossDividend, setGrossDividend] = useState("");
   const [dividendTax, setDividendTax] = useState("");
   const [dividendNotes, setDividendNotes] = useState("");
+  const [warrantCode, setWarrantCode] = useState("");
+  const [warrantBonusRatio, setWarrantBonusRatio] = useState("");
+  const [warrantQuantityReceived, setWarrantQuantityReceived] = useState("");
+  const [warrantExercisePrice, setWarrantExercisePrice] = useState("");
+  const [warrantMarketPrice, setWarrantMarketPrice] = useState("");
+  const [warrantExpiryDate, setWarrantExpiryDate] = useState("");
   const [dividendAllocations, setDividendAllocations] = useState<Record<string, string>>({});
   const [editingDividendId, setEditingDividendId] = useState<string | null>(null);
   const [tradeHistoryCounter, setTradeHistoryCounter] = useState("all");
@@ -289,6 +301,12 @@ export default function Home() {
     setGrossDividend("");
     setDividendTax("");
     setDividendNotes("");
+    setWarrantCode("");
+    setWarrantBonusRatio("");
+    setWarrantQuantityReceived("");
+    setWarrantExercisePrice("");
+    setWarrantMarketPrice("");
+    setWarrantExpiryDate("");
     setDividendAllocations({});
   }
 
@@ -302,13 +320,34 @@ export default function Home() {
       return;
     }
 
+    const warrantShares = numeric(warrantQuantityReceived);
+    const warrantPrice = numeric(warrantExercisePrice);
+    if (dividendType === "warrant_bonus") {
+      if (!warrantCode.trim()) {
+        setMessage("Enter a warrant code.");
+        return;
+      }
+      if (!warrantBonusRatio.trim()) {
+        setMessage("Enter a warrant bonus ratio.");
+        return;
+      }
+      if (warrantShares <= 0) {
+        setMessage("Enter a warrant quantity greater than zero.");
+        return;
+      }
+      if (warrantPrice <= 0) {
+        setMessage("Enter a valid exercise price.");
+        return;
+      }
+    }
+
     const allocations: DividendAllocation[] = dividendType === "bonus_issue"
       ? []
       : Object.entries(dividendAllocations)
           .map(([member_id, value]) => ({ member_id, amount: numeric(value) }))
           .filter((allocation) => allocation.amount !== 0);
 
-    if (dividendType !== "bonus_issue") {
+    if (dividendType === "cash") {
       const netDividend = numeric(grossDividend) - numeric(dividendTax);
       const allocatedAmount = allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
       if (Math.abs(allocatedAmount - netDividend) > 0.01) {
@@ -321,8 +360,14 @@ export default function Home() {
       security_id: dividendSecurityId,
       dividend_date: dividendDate,
       type: dividendType,
-      gross_amount: bonusShares,
-      tax: dividendType === "bonus_issue" ? 0 : numeric(dividendTax),
+      gross_amount: dividendType === "warrant_bonus" ? warrantShares : bonusShares,
+      tax: dividendType === "bonus_issue" || dividendType === "warrant_bonus" ? 0 : numeric(dividendTax),
+      warrant_code: dividendType === "warrant_bonus" ? warrantCode.trim() : null,
+      bonus_ratio: dividendType === "warrant_bonus" ? warrantBonusRatio.trim() : null,
+      warrant_quantity_received: dividendType === "warrant_bonus" ? warrantShares : null,
+      exercise_price: dividendType === "warrant_bonus" ? warrantPrice : null,
+      market_price: dividendType === "warrant_bonus" ? numeric(warrantMarketPrice) || null : null,
+      expiry_date: dividendType === "warrant_bonus" ? warrantExpiryDate || null : null,
       allocations,
       notes: dividendNotes.trim() || null
     };
@@ -355,6 +400,12 @@ export default function Home() {
     setGrossDividend(String(dividend.gross_amount));
     setDividendTax(String(dividend.tax));
     setDividendNotes(dividend.notes ?? "");
+    setWarrantCode(dividend.warrant_code ?? "");
+    setWarrantBonusRatio(dividend.bonus_ratio ?? "");
+    setWarrantQuantityReceived(String(dividend.warrant_quantity_received ?? ""));
+    setWarrantExercisePrice(String(dividend.exercise_price ?? ""));
+    setWarrantMarketPrice(String(dividend.market_price ?? ""));
+    setWarrantExpiryDate(dividend.expiry_date ?? "");
     setDividendAllocations(Object.fromEntries(dividend.allocations.map((item) => [item.member_id, String(item.amount)])));
   }
 
@@ -582,7 +633,7 @@ export default function Home() {
               </select>
             </label>
             <label>
-              Date
+              {dividendType === "warrant_bonus" ? "Effective date" : "Date"}
               <DateSelector value={dividendDate} onChange={setDividendDate} />
             </label>
           </div>
@@ -604,6 +655,42 @@ export default function Home() {
                 placeholder="1000"
               />
             </label>
+          ) : dividendType === "warrant_bonus" ? (
+            <>
+              <div className="row">
+                <label>
+                  Warrant code
+                  <input value={warrantCode} onChange={(event) => setWarrantCode(event.target.value)} placeholder="WA_ABC" />
+                </label>
+                <label>
+                  Bonus ratio
+                  <input value={warrantBonusRatio} onChange={(event) => setWarrantBonusRatio(event.target.value)} placeholder="1:2" />
+                </label>
+              </div>
+              <div className="row">
+                <label>
+                  Warrant quantity received
+                  <input inputMode="decimal" value={warrantQuantityReceived} onChange={(event) => setWarrantQuantityReceived(event.target.value)} placeholder="5000" />
+                </label>
+                <label>
+                  Exercise price
+                  <input inputMode="decimal" value={warrantExercisePrice} onChange={(event) => setWarrantExercisePrice(event.target.value)} placeholder="0.5000" />
+                </label>
+              </div>
+              <div className="row">
+                <label>
+                  Market price
+                  <input inputMode="decimal" value={warrantMarketPrice} onChange={(event) => setWarrantMarketPrice(event.target.value)} placeholder="0.6000" />
+                </label>
+                <label>
+                  Expiry date
+                  <DateSelector value={warrantExpiryDate} onChange={setWarrantExpiryDate} allowEmpty />
+                </label>
+              </div>
+              <p className="hint">
+                Warrant holdings are created from current member ownership percentages and do not change stock quantity, stock cost, member fund cost, or cash.
+              </p>
+            </>
           ) : (
             <div className="row">
               <label>
@@ -616,7 +703,7 @@ export default function Home() {
               </label>
             </div>
           )}
-          {dividendType === "bonus_issue" ? null : (
+          {dividendType === "cash" ? (
             <AllocationInputs
               members={members}
               values={dividendAllocations}
@@ -624,9 +711,9 @@ export default function Home() {
               label="Member net amount"
               onEvenSplit={splitDividendEvenly}
             />
-          )}
+          ) : null}
           <label>
-            Notes
+            {dividendType === "warrant_bonus" ? "Remarks" : "Notes"}
             <input value={dividendNotes} onChange={(event) => setDividendNotes(event.target.value)} placeholder="Optional" />
           </label>
           <div className="form-actions">
@@ -639,7 +726,7 @@ export default function Home() {
                 ? "Net dividend is gross minus tax."
                 : dividendType === "bonus_issue"
                   ? "Bonus shares are distributed proportionally across current holders and do not change cash."
-                  : "Warrant bonus entries are recorded in dividend history but do not change holdings or cash dividends."}
+                  : "Warrant bonus creates separate warrant holdings based on current member ownership and does not change stock, fund, or cash balances."}
             </p>
           ) : null}
         </form>
@@ -684,17 +771,28 @@ export default function Home() {
           {filteredDividends.map((dividend) => {
             const security = securities.find((item) => item.id === dividend.security_id);
             const isBonusIssue = dividend.type === "bonus_issue";
+            const isWarrantBonus = dividend.type === "warrant_bonus";
             const net = isBonusIssue ? dividend.gross_amount : dividend.gross_amount - dividend.tax;
+            const warrantDetails = isWarrantBonus
+              ? [
+                  dividend.warrant_code ? `Code: ${dividend.warrant_code}` : null,
+                  dividend.bonus_ratio ? `Ratio: ${dividend.bonus_ratio}` : null,
+                  dividend.warrant_quantity_received != null ? `Qty: ${formatNumber(dividend.warrant_quantity_received)}` : null,
+                  dividend.exercise_price != null ? `Exercise: ${formatMoney(dividend.exercise_price, security?.currency, 4, 4)}` : null,
+                  dividend.market_price != null ? `Market: ${formatMoney(dividend.market_price, security?.currency, 4, 4)}` : null,
+                  dividend.expiry_date ? `Expiry: ${dividend.expiry_date}` : null
+                ].filter(Boolean).join(" | ")
+              : "";
             return (
               <tr key={dividend.id}>
                 <td>{dividend.dividend_date}</td>
                 <td>{security?.symbol ?? "Unknown"}</td>
                 <td>{dividendTypeLabel(dividend.type)}</td>
-                <td>{isBonusIssue ? formatNumber(dividend.gross_amount) : formatMoney(dividend.gross_amount, security?.currency)}</td>
-                <td>{isBonusIssue ? "—" : formatMoney(dividend.tax, security?.currency)}</td>
-                <td>{isBonusIssue ? formatNumber(net) : formatMoney(net, security?.currency)}</td>
-                <td>{isBonusIssue ? "Auto-applied proportionally" : allocationSummary(dividend.allocations, members, "amount")}</td>
-                <td>{dividend.notes || "—"}</td>
+                <td>{isBonusIssue || isWarrantBonus ? formatNumber(dividend.gross_amount) : formatMoney(dividend.gross_amount, security?.currency)}</td>
+                <td>{isBonusIssue || isWarrantBonus ? "—" : formatMoney(dividend.tax, security?.currency)}</td>
+                <td>{isBonusIssue || isWarrantBonus ? formatNumber(net) : formatMoney(net, security?.currency)}</td>
+                <td>{isBonusIssue ? "Auto-applied proportionally" : isWarrantBonus ? "Auto-applied by ownership" : allocationSummary(dividend.allocations, members, "amount")}</td>
+                <td>{[warrantDetails, dividend.notes].filter(Boolean).join(" — ") || "—"}</td>
                 <td className="actions">
                   <button type="button" className="secondary small" onClick={() => editDividend(dividend)}>Edit</button>
                   <button type="button" className="danger small" onClick={() => void deleteHistoryItem("dividends", dividend.id)}>Delete</button>
@@ -725,7 +823,7 @@ export default function Home() {
                   onBlur={(event) => updateSecurity(row.security, { current_price: numeric(event.target.value) })}
                 />
               </label>
-              <span>Weighted cost/unit: {formatMoney(row.costPricePerUnit, row.security.currency)}</span>
+              <span>Weighted cost/unit: {formatMoney(row.costPricePerUnit, row.security.currency, 4, 4)}</span>
               <span>{formatNumber(row.quantity)} shares</span>
               <span>{formatMoney(row.marketValue, row.security.currency)}</span>
               <span className={tone(row.totalPnLIncludingDividends)}>
@@ -740,6 +838,46 @@ export default function Home() {
               </button>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Warrant holdings</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Warrant Code</th>
+                <th>Parent Stock</th>
+                <th>Quantity Held</th>
+                <th>Exercise Price</th>
+                <th>Market Price</th>
+                <th>Market Value</th>
+                <th>Unrealized G/L</th>
+                <th>Expiry Date</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.warrantHoldings.length ? summary.warrantHoldings.map((row) => (
+                <tr key={row.warrantCode}>
+                  <td>{row.warrantCode}</td>
+                  <td>{row.parentSecurity.symbol}</td>
+                  <td>{formatNumber(row.quantityHeld)}</td>
+                  <td>{formatMoney(row.exercisePrice, row.parentSecurity.currency, 4, 4)}</td>
+                  <td>{row.marketPrice == null ? "—" : formatMoney(row.marketPrice, row.parentSecurity.currency, 4, 4)}</td>
+                  <td>{row.marketValue == null ? "—" : formatMoney(row.marketValue, row.parentSecurity.currency)}</td>
+                  <td className={row.unrealizedGainLoss == null ? "" : tone(row.unrealizedGainLoss)}>
+                    {row.unrealizedGainLoss == null ? "—" : formatMoney(row.unrealizedGainLoss, row.parentSecurity.currency)}
+                  </td>
+                  <td>{row.expiryDate || "—"}</td>
+                  <td>{row.status}</td>
+                </tr>
+              )) : (
+                <tr><td colSpan={9} className="empty">No warrant holdings recorded yet.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </section>
 

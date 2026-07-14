@@ -47,6 +47,12 @@ export type Dividend = {
   type: "cash" | "bonus_issue" | "warrant_bonus";
   gross_amount: number;
   tax: number;
+  warrant_code: string | null;
+  bonus_ratio: string | null;
+  warrant_quantity_received: number | null;
+  exercise_price: number | null;
+  market_price: number | null;
+  expiry_date: string | null;
   allocations: DividendAllocation[];
   notes: string | null;
   created_at?: string;
@@ -100,9 +106,22 @@ export type SecuritySummary = {
   isEffectivelyClosed: boolean;
 };
 
+export type WarrantHolding = {
+  warrantCode: string;
+  parentSecurity: Security;
+  quantityHeld: number;
+  exercisePrice: number;
+  marketPrice: number | null;
+  marketValue: number | null;
+  unrealizedGainLoss: number | null;
+  expiryDate: string | null;
+  status: "Active" | "Expired";
+};
+
 export type PortfolioSummary = {
   memberPositions: MemberPosition[];
   securitySummaries: SecuritySummary[];
+  warrantHoldings: WarrantHolding[];
   totalsByMember: Array<{
     member: Member;
     costBasis: number;

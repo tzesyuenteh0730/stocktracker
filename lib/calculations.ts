@@ -7,6 +7,7 @@ import type {
   PortfolioSummary,
   Security,
   SecuritySummary,
+  WarrantHolding,
   Trade
 } from "./types";
 
@@ -39,6 +40,8 @@ export function buildPortfolioSummary(
   const securityMap = new Map(securities.map((security) => [security.id, security]));
   const lots = new Map<string, RunningLot>();
   const dividendTotals = new Map<string, number>();
+  const warrantTotals = new Map<string, WarrantHolding>();
+  const today = new Date().toISOString().slice(0, 10);
 
   const keyFor = (securityId: string, memberId: string) => `${securityId}:${memberId}`;
   const getLot = (securityId: string, memberId: string) => {
@@ -94,6 +97,44 @@ export function buildPortfolioSummary(
 
     const dividend = event.item;
     if (!securityMap.has(dividend.security_id)) continue;
+
+    if (dividend.type === "warrant_bonus") {
+      const securityLots = [...lots.entries()].filter(([key]) => key.startsWith(`${dividend.security_id}:`));
+      const totalQuantity = securityLots.reduce((sum, [, lot]) => sum + lot.quantity, 0);
+      const warrantQuantity = money(dividend.warrant_quantity_received ?? dividend.gross_amount);
+      const warrantCode = dividend.warrant_code?.trim() || `WARRANT-${securityMap.get(dividend.security_id)?.symbol ?? dividend.security_id}-${dividend.dividend_date}`;
+      const exercisePrice = money(dividend.exercise_price ?? 0);
+      const marketPrice = dividend.market_price == null ? null : money(dividend.market_price);
+      const expiryDate = dividend.expiry_date ?? null;
+      const status: WarrantHolding["status"] = expiryDate && expiryDate < today ? "Expired" : "Active";
+
+      if (totalQuantity > 0 && warrantQuantity > 0) {
+        const aggregate =
+          warrantTotals.get(warrantCode) ??
+          {
+            warrantCode,
+            parentSecurity: securityMap.get(dividend.security_id)!,
+            quantityHeld: 0,
+            exercisePrice,
+            marketPrice,
+            marketValue: null,
+            unrealizedGainLoss: null,
+            expiryDate,
+            status
+          };
+
+        const ratio = warrantQuantity / totalQuantity;
+        aggregate.quantityHeld += securityLots.reduce((sum, [, lot]) => sum + lot.quantity * ratio, 0);
+        aggregate.exercisePrice = exercisePrice;
+        aggregate.marketPrice = marketPrice;
+        aggregate.marketValue = marketPrice == null ? null : aggregate.quantityHeld * marketPrice;
+        aggregate.unrealizedGainLoss = marketPrice == null ? null : aggregate.quantityHeld * (marketPrice - exercisePrice);
+        aggregate.expiryDate = expiryDate;
+        aggregate.status = status;
+        warrantTotals.set(warrantCode, aggregate);
+      }
+      continue;
+    }
 
     const securityLots = [...lots.entries()].filter(([key]) => key.startsWith(`${dividend.security_id}:`));
     const totalQuantity = securityLots.reduce((sum, [, lot]) => sum + lot.quantity, 0);
@@ -242,6 +283,7 @@ export function buildPortfolioSummary(
     securitySummaries: [...totalsBySecurity.values()].sort((a, b) =>
       a.security.symbol.localeCompare(b.security.symbol)
     ),
+    warrantHoldings: [...warrantTotals.values()].sort((a, b) => a.warrantCode.localeCompare(b.warrantCode)),
     totalsByMember: [...totalsByMember.values()].sort((a, b) => a.member.name.localeCompare(b.member.name)),
     poolTotals,
     cashBalance: calculateCashBalance(cashTransactions, trades),
@@ -301,11 +343,12 @@ export function buildCashLedger(
   });
 }
 
-export function formatMoney(value: number, currency = "MYR") {
+export function formatMoney(value: number, currency = "MYR", minimumFractionDigits = 2, maximumFractionDigits = 2) {
   return new Intl.NumberFormat("en-MY", {
     style: "currency",
     currency,
-    maximumFractionDigits: 2
+    minimumFractionDigits,
+    maximumFractionDigits
   }).format(money(value));
 }
 

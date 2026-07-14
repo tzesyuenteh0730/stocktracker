@@ -37,6 +37,12 @@ create table if not exists dividends (
   type text not null default 'cash' check (type in ('cash', 'bonus_issue', 'warrant_bonus')),
   gross_amount numeric(18, 6) not null default 0,
   tax numeric(18, 6) not null default 0,
+  warrant_code text,
+  bonus_ratio text,
+  warrant_quantity_received numeric(18, 6),
+  exercise_price numeric(18, 6),
+  market_price numeric(18, 6),
+  expiry_date date,
   allocations jsonb not null default '[]'::jsonb,
   notes text,
   created_at timestamptz not null default now()
@@ -44,6 +50,12 @@ create table if not exists dividends (
 
 -- Safe migration for databases created before dividend types were introduced.
 alter table dividends add column if not exists type text not null default 'cash';
+alter table dividends add column if not exists warrant_code text;
+alter table dividends add column if not exists bonus_ratio text;
+alter table dividends add column if not exists warrant_quantity_received numeric(18, 6);
+alter table dividends add column if not exists exercise_price numeric(18, 6);
+alter table dividends add column if not exists market_price numeric(18, 6);
+alter table dividends add column if not exists expiry_date date;
 
 do $$
 declare
