@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
-import { buildCashLedger, buildPortfolioSummary, cashImpactForTrade, formatMoney, formatNumber } from "@/lib/calculations";
+import { buildCashLedger, buildPortfolioSummary, formatMoney, formatNumber } from "@/lib/calculations";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 import type { CashTransaction, Dividend, DividendAllocation, Member, Security, Trade } from "@/lib/types";
 
@@ -126,10 +126,10 @@ export default function Home() {
       supabase.from("cash_transactions").select("*").order("transaction_date", { ascending: false })
     ]);
 
-    const error = membersResult.error ?? securitiesResult.error ?? tradesResult.error ?? dividendsResult.error ?? cashResult.error;
-    if (error) {
+    const coreError = membersResult.error ?? securitiesResult.error ?? tradesResult.error ?? dividendsResult.error;
+    if (coreError) {
       setLoadState("error");
-      setMessage(error.message);
+      setMessage(coreError.message);
       return;
     }
 
@@ -137,7 +137,12 @@ export default function Home() {
     setSecurities((securitiesResult.data ?? []).map(normalizeSecurity));
     setTrades((tradesResult.data ?? []).map(normalizeTrade));
     setDividends((dividendsResult.data ?? []).map(normalizeDividend));
-    setCashTransactions((cashResult.data ?? []).map(normalizeCashTransaction));
+    if (cashResult.error) {
+      setCashTransactions([]);
+      setMessage("Cash account is unavailable until the cash_transactions migration is run in Supabase.");
+    } else {
+      setCashTransactions((cashResult.data ?? []).map(normalizeCashTransaction));
+    }
     setLoadState("ready");
   }
 
@@ -236,12 +241,6 @@ export default function Home() {
       notes: tradeNotes.trim() || null
     };
 
-    const existingTrade = editingTradeId ? trades.find((item) => item.id === editingTradeId) : undefined;
-    const balanceBeforeSave = summary.cashBalance - (existingTrade ? cashImpactForTrade(existingTrade) : 0);
-    if (balanceBeforeSave + cashImpactForTrade(trade) < -0.0001) {
-      setMessage("Insufficient cash balance for this trade.");
-      return;
-    }
     const { error } = editingTradeId
       ? await supabase.from("trades").update(trade).eq("id", editingTradeId)
       : await supabase.from("trades").insert(trade);
@@ -260,11 +259,6 @@ export default function Home() {
       setMessage("Enter a cash amount greater than zero.");
       return;
     }
-    if (cashType === "withdrawal" && summary.cashBalance - amount < -0.0001) {
-      setMessage("Insufficient cash balance for this withdrawal.");
-      return;
-    }
-
     const { error } = await supabase.from("cash_transactions").insert({
       transaction_date: cashDate,
       type: cashType,
