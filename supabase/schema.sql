@@ -34,12 +34,16 @@ create table if not exists dividends (
   id uuid primary key default gen_random_uuid(),
   security_id uuid not null references securities(id) on delete cascade,
   dividend_date date not null,
+  type text not null default 'cash' check (type in ('cash', 'bonus_issue', 'warrant_bonus')),
   gross_amount numeric(18, 6) not null default 0,
   tax numeric(18, 6) not null default 0,
   allocations jsonb not null default '[]'::jsonb,
   notes text,
   created_at timestamptz not null default now()
 );
+
+-- Safe migration for databases created before dividend types were introduced.
+alter table dividends add column if not exists type text not null default 'cash';
 
 create table if not exists cash_transactions (
   id uuid primary key default gen_random_uuid(),

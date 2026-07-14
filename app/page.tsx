@@ -39,6 +39,7 @@ const normalizeTrade = (row: Trade): Trade => ({
 
 const normalizeDividend = (row: Dividend): Dividend => ({
   ...row,
+  type: row.type ?? "cash",
   gross_amount: numeric(row.gross_amount),
   tax: numeric(row.tax),
   allocations: row.allocations ?? [],
@@ -81,11 +82,14 @@ export default function Home() {
 
   const [dividendSecurityId, setDividendSecurityId] = useState("");
   const [dividendDate, setDividendDate] = useState(today);
+  const [dividendType, setDividendType] = useState<Dividend["type"]>("cash");
   const [grossDividend, setGrossDividend] = useState("");
   const [dividendTax, setDividendTax] = useState("");
   const [dividendNotes, setDividendNotes] = useState("");
   const [dividendAllocations, setDividendAllocations] = useState<Record<string, string>>({});
   const [editingDividendId, setEditingDividendId] = useState<string | null>(null);
+  const [tradeHistoryCounter, setTradeHistoryCounter] = useState("all");
+  const [dividendHistoryCounter, setDividendHistoryCounter] = useState("all");
 
   const [cashDate, setCashDate] = useState(today);
   const [cashType, setCashType] = useState<"deposit" | "withdrawal">("deposit");
@@ -109,6 +113,8 @@ export default function Home() {
     (!ledgerEndDate || entry.date <= ledgerEndDate) &&
     (ledgerType === "all" || entry.type === ledgerType)
   );
+  const filteredTrades = trades.filter((trade) => tradeHistoryCounter === "all" || trade.security_id === tradeHistoryCounter);
+  const filteredDividends = dividends.filter((dividend) => dividendHistoryCounter === "all" || dividend.security_id === dividendHistoryCounter);
 
   const selectedTradeSecurity = securities.find((security) => security.id === tradeSecurityId);
   const selectedDividendSecurity = securities.find((security) => security.id === dividendSecurityId);
@@ -198,8 +204,8 @@ export default function Home() {
 
   function splitDividendEvenly() {
     if (!members.length) return;
-    const net = numeric(grossDividend) - numeric(dividendTax);
-    const share = net / members.length;
+    const total = dividendType === "bonus_issue" ? numeric(grossDividend) : numeric(grossDividend) - numeric(dividendTax);
+    const share = total / members.length;
     setDividendAllocations(Object.fromEntries(members.map((member) => [member.id, String(share)])));
   }
 
@@ -276,6 +282,7 @@ export default function Home() {
     setEditingDividendId(null);
     setDividendSecurityId("");
     setDividendDate(today);
+    setDividendType("cash");
     setGrossDividend("");
     setDividendTax("");
     setDividendNotes("");
@@ -286,22 +293,25 @@ export default function Home() {
     event.preventDefault();
     if (!supabase || !dividendSecurityId) return;
 
-    const netDividend = numeric(grossDividend) - numeric(dividendTax);
+    const netDividend = dividendType === "bonus_issue" ? numeric(grossDividend) : numeric(grossDividend) - numeric(dividendTax);
     const allocations: DividendAllocation[] = Object.entries(dividendAllocations)
       .map(([member_id, value]) => ({ member_id, amount: numeric(value) }))
       .filter((allocation) => allocation.amount !== 0);
     const allocatedAmount = allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
 
     if (Math.abs(allocatedAmount - netDividend) > 0.01) {
-      setMessage("Dividend allocation must add up to the net dividend after tax.");
+      setMessage(dividendType === "bonus_issue"
+        ? "Bonus issue allocation must add up to the total bonus shares."
+        : "Dividend allocation must add up to the net dividend after tax.");
       return;
     }
 
     const dividend = {
       security_id: dividendSecurityId,
       dividend_date: dividendDate,
+      type: dividendType,
       gross_amount: numeric(grossDividend),
-      tax: numeric(dividendTax),
+      tax: dividendType === "bonus_issue" ? 0 : numeric(dividendTax),
       allocations,
       notes: dividendNotes.trim() || null
     };
@@ -330,6 +340,7 @@ export default function Home() {
     setEditingDividendId(dividend.id);
     setDividendSecurityId(dividend.security_id);
     setDividendDate(dividend.dividend_date);
+    setDividendType(dividend.type);
     setGrossDividend(String(dividend.gross_amount));
     setDividendTax(String(dividend.tax));
     setDividendNotes(dividend.notes ?? "");
@@ -564,21 +575,36 @@ export default function Home() {
               <DateSelector value={dividendDate} onChange={setDividendDate} />
             </label>
           </div>
-          <div className="row">
+          <label>
+            Dividend type
+            <select value={dividendType} onChange={(event) => setDividendType(event.target.value as Dividend["type"])}>
+              <option value="cash">Cash dividend</option>
+              <option value="bonus_issue">Bonus issue</option>
+              <option value="warrant_bonus">Warrant bonus</option>
+            </select>
+          </label>
+          {dividendType === "bonus_issue" ? (
             <label>
-              Gross dividend
+              Bonus shares
               <input inputMode="decimal" value={grossDividend} onChange={(event) => setGrossDividend(event.target.value)} />
             </label>
-            <label>
-              Tax
-              <input inputMode="decimal" value={dividendTax} onChange={(event) => setDividendTax(event.target.value)} />
-            </label>
-          </div>
+          ) : (
+            <div className="row">
+              <label>
+                Gross dividend
+                <input inputMode="decimal" value={grossDividend} onChange={(event) => setGrossDividend(event.target.value)} />
+              </label>
+              <label>
+                Tax
+                <input inputMode="decimal" value={dividendTax} onChange={(event) => setDividendTax(event.target.value)} />
+              </label>
+            </div>
+          )}
           <AllocationInputs
             members={members}
             values={dividendAllocations}
             setValues={setDividendAllocations}
-            label="Member net amount"
+            label={dividendType === "bonus_issue" ? "Member bonus shares" : "Member net amount"}
             onEvenSplit={splitDividendEvenly}
           />
           <label>
@@ -589,7 +615,15 @@ export default function Home() {
             <button type="submit">{editingDividendId ? "Update dividend" : "Save dividend"}</button>
             {editingDividendId ? <button type="button" className="secondary" onClick={resetDividendForm}>Cancel</button> : null}
           </div>
-          {selectedDividendSecurity ? <p className="hint">Net dividend is gross minus tax.</p> : null}
+          {selectedDividendSecurity ? (
+            <p className="hint">
+              {dividendType === "cash"
+                ? "Net dividend is gross minus tax."
+                : dividendType === "bonus_issue"
+                  ? "Bonus shares add to the assigned member's holding quantity and do not change cash."
+                  : "Warrant bonus entries are recorded in dividend history but do not change holdings or cash dividends."}
+            </p>
+          ) : null}
         </form>
       </section>
 
@@ -598,9 +632,10 @@ export default function Home() {
           title="Trade history"
           emptyMessage="No trades recorded yet."
           headers={["Date", "Counter", "Type", "Quantity", "Price", "Fees", "Allocation", "Notes", "Actions"]}
-          isEmpty={trades.length === 0}
+          isEmpty={filteredTrades.length === 0}
+          controls={<CounterFilter value={tradeHistoryCounter} onChange={setTradeHistoryCounter} securities={securities} />}
         >
-          {trades.map((trade) => {
+          {filteredTrades.map((trade) => {
             const security = securities.find((item) => item.id === trade.security_id);
             return (
               <tr key={trade.id}>
@@ -624,20 +659,23 @@ export default function Home() {
         <HistoryTable
           title="Dividend history"
           emptyMessage="No dividends recorded yet."
-          headers={["Date", "Counter", "Gross", "Tax", "Net", "Allocation", "Notes", "Actions"]}
-          isEmpty={dividends.length === 0}
+          headers={["Date", "Counter", "Type", "Gross", "Tax", "Net", "Allocation", "Notes", "Actions"]}
+          isEmpty={filteredDividends.length === 0}
+          controls={<CounterFilter value={dividendHistoryCounter} onChange={setDividendHistoryCounter} securities={securities} />}
         >
-          {dividends.map((dividend) => {
+          {filteredDividends.map((dividend) => {
             const security = securities.find((item) => item.id === dividend.security_id);
-            const net = dividend.gross_amount - dividend.tax;
+            const isBonusIssue = dividend.type === "bonus_issue";
+            const net = isBonusIssue ? dividend.gross_amount : dividend.gross_amount - dividend.tax;
             return (
               <tr key={dividend.id}>
                 <td>{dividend.dividend_date}</td>
                 <td>{security?.symbol ?? "Unknown"}</td>
-                <td>{formatMoney(dividend.gross_amount, security?.currency)}</td>
-                <td>{formatMoney(dividend.tax, security?.currency)}</td>
-                <td>{formatMoney(net, security?.currency)}</td>
-                <td>{allocationSummary(dividend.allocations, members, "amount")}</td>
+                <td>{dividendTypeLabel(dividend.type)}</td>
+                <td>{isBonusIssue ? formatNumber(dividend.gross_amount) : formatMoney(dividend.gross_amount, security?.currency)}</td>
+                <td>{isBonusIssue ? "—" : formatMoney(dividend.tax, security?.currency)}</td>
+                <td>{isBonusIssue ? formatNumber(net) : formatMoney(net, security?.currency)}</td>
+                <td>{allocationSummary(dividend.allocations, members, isBonusIssue ? "quantity" : "amount")}</td>
                 <td>{dividend.notes || "—"}</td>
                 <td className="actions">
                   <button type="button" className="secondary small" onClick={() => editDividend(dividend)}>Edit</button>
@@ -806,17 +844,22 @@ function HistoryTable({
   headers,
   emptyMessage,
   isEmpty,
+  controls,
   children
 }: {
   title: string;
   headers: string[];
   emptyMessage: string;
   isEmpty: boolean;
+  controls?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className="panel history-panel">
-      <h2>{title}</h2>
+      <div className="section-heading">
+        <h2>{title}</h2>
+        {controls}
+      </div>
       <div className="table-wrap">
         <table>
           <thead>
@@ -829,6 +872,32 @@ function HistoryTable({
       </div>
     </section>
   );
+}
+
+function CounterFilter({
+  value,
+  onChange,
+  securities
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  securities: Security[];
+}) {
+  return (
+    <label className="counter-filter">
+      Counter
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="all">All counters</option>
+        {securities.map((security) => <option key={security.id} value={security.id}>{security.symbol}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function dividendTypeLabel(type: Dividend["type"]) {
+  if (type === "bonus_issue") return "Bonus issue";
+  if (type === "warrant_bonus") return "Warrant bonus";
+  return "Cash dividend";
 }
 
 function allocationSummary(

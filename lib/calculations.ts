@@ -63,40 +63,60 @@ export function buildPortfolioSummary(
     return next;
   };
 
-  const sortedTrades = [...trades].sort((a, b) => a.trade_date.localeCompare(b.trade_date));
+  const portfolioEvents = [
+    ...trades.map((trade) => ({ kind: "trade" as const, date: trade.trade_date, item: trade, order: 1 })),
+    ...dividends
+      .filter((dividend) => dividend.type === "bonus_issue")
+      .map((dividend) => ({ kind: "bonus_issue" as const, date: dividend.dividend_date, item: dividend, order: 0 }))
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order);
 
-  for (const trade of sortedTrades) {
-    if (!securityMap.has(trade.security_id) || trade.quantity <= 0) continue;
+  for (const event of portfolioEvents) {
+    if (event.kind === "trade") {
+      const trade = event.item;
+      if (!securityMap.has(trade.security_id) || trade.quantity <= 0) continue;
 
-    for (const allocation of trade.allocations ?? []) {
-      if (!memberMap.has(allocation.member_id) || allocation.quantity <= 0) continue;
+      for (const allocation of trade.allocations ?? []) {
+        if (!memberMap.has(allocation.member_id) || allocation.quantity <= 0) continue;
 
-      const lot = getLot(trade.security_id, allocation.member_id);
-      const allocationRatio = allocation.quantity / trade.quantity;
-      const feeShare = money(trade.fees) * allocationRatio;
+        const lot = getLot(trade.security_id, allocation.member_id);
+        const allocationRatio = allocation.quantity / trade.quantity;
+        const feeShare = money(trade.fees) * allocationRatio;
 
-      if (trade.type === "buy") {
-        lot.quantity += allocation.quantity;
-        lot.costBasis += allocation.quantity * trade.price + feeShare;
-      } else {
-        const sellQuantity = Math.min(allocation.quantity, lot.quantity);
-        const averageCost = lot.quantity > 0 ? lot.costBasis / lot.quantity : 0;
-        const proceeds = sellQuantity * trade.price - feeShare;
-        const releasedCost = averageCost * sellQuantity;
+        if (trade.type === "buy") {
+          lot.quantity += allocation.quantity;
+          lot.costBasis += allocation.quantity * trade.price + feeShare;
+        } else {
+          const sellQuantity = Math.min(allocation.quantity, lot.quantity);
+          const averageCost = lot.quantity > 0 ? lot.costBasis / lot.quantity : 0;
+          const proceeds = sellQuantity * trade.price - feeShare;
+          const releasedCost = averageCost * sellQuantity;
 
-        lot.quantity -= sellQuantity;
-        lot.costBasis -= releasedCost;
-        lot.realizedPnL += proceeds - releasedCost;
+          lot.quantity -= sellQuantity;
+          lot.costBasis -= releasedCost;
+          lot.realizedPnL += proceeds - releasedCost;
 
-        if (lot.quantity < 0.000001) {
-          lot.quantity = 0;
-          lot.costBasis = 0;
+          if (lot.quantity < 0.000001) {
+            lot.quantity = 0;
+            lot.costBasis = 0;
+          }
         }
       }
+      continue;
+    }
+
+    const dividend = event.item;
+    if (!securityMap.has(dividend.security_id)) continue;
+
+    for (const allocation of dividend.allocations ?? []) {
+      if (!memberMap.has(allocation.member_id) || allocation.amount <= 0) continue;
+
+      const lot = getLot(dividend.security_id, allocation.member_id);
+      lot.quantity += allocation.amount;
     }
   }
 
   for (const dividend of dividends) {
+    if (dividend.type !== "cash") continue;
     if (!securityMap.has(dividend.security_id)) continue;
 
     for (const allocation of dividend.allocations ?? []) {

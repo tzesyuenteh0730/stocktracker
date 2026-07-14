@@ -44,6 +44,7 @@ export type Dividend = {
   id: string;
   security_id: string;
   dividend_date: string;
+  type: "cash" | "bonus_issue" | "warrant_bonus";
   gross_amount: number;
   tax: number;
   allocations: DividendAllocation[];
