@@ -87,6 +87,7 @@ export default function Home() {
   const [dividendTax, setDividendTax] = useState("");
   const [dividendNotes, setDividendNotes] = useState("");
   const [dividendAllocations, setDividendAllocations] = useState<Record<string, string>>({});
+  const [bonusAssigneeId, setBonusAssigneeId] = useState("");
   const [editingDividendId, setEditingDividendId] = useState<string | null>(null);
   const [tradeHistoryCounter, setTradeHistoryCounter] = useState("all");
   const [dividendHistoryCounter, setDividendHistoryCounter] = useState("all");
@@ -155,6 +156,18 @@ export default function Home() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  useEffect(() => {
+    if (dividendType === "bonus_issue") {
+      if (!bonusAssigneeId && members[0]) {
+        setBonusAssigneeId(members[0].id);
+      }
+      return;
+    }
+    if (bonusAssigneeId) {
+      setBonusAssigneeId("");
+    }
+  }, [bonusAssigneeId, dividendType, members]);
 
   async function addMember(event: FormEvent) {
     event.preventDefault();
@@ -287,30 +300,43 @@ export default function Home() {
     setDividendTax("");
     setDividendNotes("");
     setDividendAllocations({});
+    setBonusAssigneeId("");
   }
 
   async function saveDividend(event: FormEvent) {
     event.preventDefault();
     if (!supabase || !dividendSecurityId) return;
 
-    const netDividend = dividendType === "bonus_issue" ? numeric(grossDividend) : numeric(grossDividend) - numeric(dividendTax);
-    const allocations: DividendAllocation[] = Object.entries(dividendAllocations)
-      .map(([member_id, value]) => ({ member_id, amount: numeric(value) }))
-      .filter((allocation) => allocation.amount !== 0);
-    const allocatedAmount = allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+    const bonusShares = numeric(grossDividend);
+    const allocations: DividendAllocation[] = dividendType === "bonus_issue"
+      ? [{ member_id: bonusAssigneeId, amount: bonusShares }]
+      : Object.entries(dividendAllocations)
+          .map(([member_id, value]) => ({ member_id, amount: numeric(value) }))
+          .filter((allocation) => allocation.amount !== 0);
 
-    if (Math.abs(allocatedAmount - netDividend) > 0.01) {
-      setMessage(dividendType === "bonus_issue"
-        ? "Bonus issue allocation must add up to the total bonus shares."
-        : "Dividend allocation must add up to the net dividend after tax.");
-      return;
+    if (dividendType === "bonus_issue") {
+      if (!bonusAssigneeId) {
+        setMessage("Select the member who receives the bonus shares.");
+        return;
+      }
+      if (bonusShares <= 0) {
+        setMessage("Enter a bonus share quantity greater than zero.");
+        return;
+      }
+    } else {
+      const netDividend = numeric(grossDividend) - numeric(dividendTax);
+      const allocatedAmount = allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+      if (Math.abs(allocatedAmount - netDividend) > 0.01) {
+        setMessage("Dividend allocation must add up to the net dividend after tax.");
+        return;
+      }
     }
 
     const dividend = {
       security_id: dividendSecurityId,
       dividend_date: dividendDate,
       type: dividendType,
-      gross_amount: numeric(grossDividend),
+      gross_amount: bonusShares,
       tax: dividendType === "bonus_issue" ? 0 : numeric(dividendTax),
       allocations,
       notes: dividendNotes.trim() || null
@@ -345,6 +371,7 @@ export default function Home() {
     setDividendTax(String(dividend.tax));
     setDividendNotes(dividend.notes ?? "");
     setDividendAllocations(Object.fromEntries(dividend.allocations.map((item) => [item.member_id, String(item.amount)])));
+    setBonusAssigneeId(dividend.allocations[0]?.member_id ?? "");
   }
 
   async function deleteHistoryItem(table: "trades" | "dividends", id: string) {
@@ -584,10 +611,23 @@ export default function Home() {
             </select>
           </label>
           {dividendType === "bonus_issue" ? (
-            <label>
-              Bonus shares
-              <input inputMode="decimal" value={grossDividend} onChange={(event) => setGrossDividend(event.target.value)} />
-            </label>
+            <div className="row">
+              <label>
+                Assigned member
+                <select value={bonusAssigneeId} onChange={(event) => setBonusAssigneeId(event.target.value)}>
+                  <option value="">Select</option>
+                  {members.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Bonus shares
+                <input inputMode="decimal" value={grossDividend} onChange={(event) => setGrossDividend(event.target.value)} />
+              </label>
+            </div>
           ) : (
             <div className="row">
               <label>
@@ -600,13 +640,15 @@ export default function Home() {
               </label>
             </div>
           )}
-          <AllocationInputs
-            members={members}
-            values={dividendAllocations}
-            setValues={setDividendAllocations}
-            label={dividendType === "bonus_issue" ? "Member bonus shares" : "Member net amount"}
-            onEvenSplit={splitDividendEvenly}
-          />
+          {dividendType === "bonus_issue" ? null : (
+            <AllocationInputs
+              members={members}
+              values={dividendAllocations}
+              setValues={setDividendAllocations}
+              label="Member net amount"
+              onEvenSplit={splitDividendEvenly}
+            />
+          )}
           <label>
             Notes
             <input value={dividendNotes} onChange={(event) => setDividendNotes(event.target.value)} placeholder="Optional" />
