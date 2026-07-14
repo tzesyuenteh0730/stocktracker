@@ -45,6 +45,29 @@ create table if not exists dividends (
 -- Safe migration for databases created before dividend types were introduced.
 alter table dividends add column if not exists type text not null default 'cash';
 
+do $$
+declare
+  constraint_name text;
+begin
+  for constraint_name in
+    select conname
+    from pg_constraint c
+    join pg_class t on c.conrelid = t.oid
+    join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'public'
+      and t.relname = 'dividends'
+      and c.contype = 'c'
+      and pg_get_constraintdef(c.oid) ilike '%type%'
+      and pg_get_constraintdef(c.oid) ilike '%cash%'
+  loop
+    execute format('alter table dividends drop constraint if exists %I', constraint_name);
+  end loop;
+end $$;
+
+alter table dividends
+  add constraint dividends_type_check
+  check (type in ('cash', 'bonus_issue', 'warrant_bonus'));
+
 create table if not exists cash_transactions (
   id uuid primary key default gen_random_uuid(),
   transaction_date date not null,

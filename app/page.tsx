@@ -18,6 +18,9 @@ const numeric = (value: string | number) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const describeSupabaseError = (error: { message?: string; details?: string; hint?: string } | null | undefined) =>
+  [error?.message, error?.details, error?.hint].filter(Boolean).join(" | ");
+
 const normalizeMember = (row: Member): Member => ({
   ...row,
   notes: row.notes ?? null
@@ -87,7 +90,6 @@ export default function Home() {
   const [dividendTax, setDividendTax] = useState("");
   const [dividendNotes, setDividendNotes] = useState("");
   const [dividendAllocations, setDividendAllocations] = useState<Record<string, string>>({});
-  const [bonusAssigneeId, setBonusAssigneeId] = useState("");
   const [editingDividendId, setEditingDividendId] = useState<string | null>(null);
   const [tradeHistoryCounter, setTradeHistoryCounter] = useState("all");
   const [dividendHistoryCounter, setDividendHistoryCounter] = useState("all");
@@ -157,18 +159,6 @@ export default function Home() {
     void loadData();
   }, []);
 
-  useEffect(() => {
-    if (dividendType === "bonus_issue") {
-      if (!bonusAssigneeId && members[0]) {
-        setBonusAssigneeId(members[0].id);
-      }
-      return;
-    }
-    if (bonusAssigneeId) {
-      setBonusAssigneeId("");
-    }
-  }, [bonusAssigneeId, dividendType, members]);
-
   async function addMember(event: FormEvent) {
     event.preventDefault();
     if (!supabase || !memberName.trim()) return;
@@ -178,7 +168,7 @@ export default function Home() {
       notes: memberNotes.trim() || null
     });
 
-    if (error) return setMessage(error.message);
+    if (error) return setMessage(describeSupabaseError(error));
     setMemberName("");
     setMemberNotes("");
     await loadData();
@@ -195,7 +185,7 @@ export default function Home() {
       current_price: numeric(currentPrice)
     });
 
-    if (error) return setMessage(error.message);
+    if (error) return setMessage(describeSupabaseError(error));
     setSymbol("");
     setSecurityName("");
     setCurrentPrice("");
@@ -300,7 +290,6 @@ export default function Home() {
     setDividendTax("");
     setDividendNotes("");
     setDividendAllocations({});
-    setBonusAssigneeId("");
   }
 
   async function saveDividend(event: FormEvent) {
@@ -308,22 +297,18 @@ export default function Home() {
     if (!supabase || !dividendSecurityId) return;
 
     const bonusShares = numeric(grossDividend);
+    if (dividendType === "bonus_issue" && bonusShares <= 0) {
+      setMessage("Enter a bonus share quantity greater than zero.");
+      return;
+    }
+
     const allocations: DividendAllocation[] = dividendType === "bonus_issue"
-      ? [{ member_id: bonusAssigneeId, amount: bonusShares }]
+      ? []
       : Object.entries(dividendAllocations)
           .map(([member_id, value]) => ({ member_id, amount: numeric(value) }))
           .filter((allocation) => allocation.amount !== 0);
 
-    if (dividendType === "bonus_issue") {
-      if (!bonusAssigneeId) {
-        setMessage("Select the member who receives the bonus shares.");
-        return;
-      }
-      if (bonusShares <= 0) {
-        setMessage("Enter a bonus share quantity greater than zero.");
-        return;
-      }
-    } else {
+    if (dividendType !== "bonus_issue") {
       const netDividend = numeric(grossDividend) - numeric(dividendTax);
       const allocatedAmount = allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
       if (Math.abs(allocatedAmount - netDividend) > 0.01) {
@@ -371,7 +356,6 @@ export default function Home() {
     setDividendTax(String(dividend.tax));
     setDividendNotes(dividend.notes ?? "");
     setDividendAllocations(Object.fromEntries(dividend.allocations.map((item) => [item.member_id, String(item.amount)])));
-    setBonusAssigneeId(dividend.allocations[0]?.member_id ?? "");
   }
 
   async function deleteHistoryItem(table: "trades" | "dividends", id: string) {
@@ -611,23 +595,15 @@ export default function Home() {
             </select>
           </label>
           {dividendType === "bonus_issue" ? (
-            <div className="row">
-              <label>
-                Assigned member
-                <select value={bonusAssigneeId} onChange={(event) => setBonusAssigneeId(event.target.value)}>
-                  <option value="">Select</option>
-                  {members.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Bonus shares
-                <input inputMode="decimal" value={grossDividend} onChange={(event) => setGrossDividend(event.target.value)} />
-              </label>
-            </div>
+            <label>
+              Bonus shares to issue
+              <input
+                inputMode="decimal"
+                value={grossDividend}
+                onChange={(event) => setGrossDividend(event.target.value)}
+                placeholder="1000"
+              />
+            </label>
           ) : (
             <div className="row">
               <label>
@@ -662,7 +638,7 @@ export default function Home() {
               {dividendType === "cash"
                 ? "Net dividend is gross minus tax."
                 : dividendType === "bonus_issue"
-                  ? "Bonus shares add to the assigned member's holding quantity and do not change cash."
+                  ? "Bonus shares are distributed proportionally across current holders and do not change cash."
                   : "Warrant bonus entries are recorded in dividend history but do not change holdings or cash dividends."}
             </p>
           ) : null}
@@ -717,7 +693,7 @@ export default function Home() {
                 <td>{isBonusIssue ? formatNumber(dividend.gross_amount) : formatMoney(dividend.gross_amount, security?.currency)}</td>
                 <td>{isBonusIssue ? "—" : formatMoney(dividend.tax, security?.currency)}</td>
                 <td>{isBonusIssue ? formatNumber(net) : formatMoney(net, security?.currency)}</td>
-                <td>{allocationSummary(dividend.allocations, members, isBonusIssue ? "quantity" : "amount")}</td>
+                <td>{isBonusIssue ? "Auto-applied proportionally" : allocationSummary(dividend.allocations, members, "amount")}</td>
                 <td>{dividend.notes || "—"}</td>
                 <td className="actions">
                   <button type="button" className="secondary small" onClick={() => editDividend(dividend)}>Edit</button>
