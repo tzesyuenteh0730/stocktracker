@@ -209,6 +209,21 @@ export function buildPortfolioSummary(
     poolTotals.totalPnLIncludingDividends += position.totalPnLIncludingDividends;
   }
 
+  // Keep every saved counter visible, even before it has a member position.
+  // This does not contribute anything to member totals or portfolio P/L.
+  for (const security of securities) {
+    if (totalsBySecurity.has(security.id)) continue;
+
+    const buys = buyTotalsBySecurity.get(security.id);
+    totalsBySecurity.set(security.id, {
+      security,
+      quantity: 0,
+      costPricePerUnit: buys && buys.quantity > 0 ? buys.value / buys.quantity : 0,
+      isEffectivelyClosed: security.is_closed,
+      ...emptyTotals()
+    });
+  }
+
   return {
     memberPositions: memberPositions.sort((a, b) =>
       `${a.security.symbol}:${a.member.name}`.localeCompare(`${b.security.symbol}:${b.member.name}`)
