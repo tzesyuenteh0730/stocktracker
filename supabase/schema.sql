@@ -21,10 +21,12 @@ create table if not exists trades (
   id uuid primary key default gen_random_uuid(),
   security_id uuid not null references securities(id) on delete cascade,
   trade_date date not null,
+  instrument_type text not null default 'stock' check (instrument_type in ('stock', 'warrant')),
   type text not null check (type in ('buy', 'sell')),
   quantity numeric(18, 6) not null check (quantity > 0),
   price numeric(18, 6) not null check (price >= 0),
   fees numeric(18, 6) not null default 0,
+  warrant_code text,
   allocations jsonb not null default '[]'::jsonb,
   notes text,
   created_at timestamptz not null default now()
@@ -56,6 +58,32 @@ alter table dividends add column if not exists warrant_quantity_received numeric
 alter table dividends add column if not exists exercise_price numeric(18, 6);
 alter table dividends add column if not exists market_price numeric(18, 6);
 alter table dividends add column if not exists expiry_date date;
+alter table trades add column if not exists instrument_type text not null default 'stock';
+alter table trades add column if not exists warrant_code text;
+
+update trades set instrument_type = 'stock' where instrument_type is null;
+
+do $$
+declare
+  constraint_name text;
+begin
+  for constraint_name in
+    select conname
+    from pg_constraint c
+    join pg_class t on c.conrelid = t.oid
+    join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'public'
+      and t.relname = 'trades'
+      and c.contype = 'c'
+      and pg_get_constraintdef(c.oid) ilike '%instrument_type%'
+  loop
+    execute format('alter table trades drop constraint if exists %I', constraint_name);
+  end loop;
+end $$;
+
+alter table trades
+  add constraint trades_instrument_type_check
+  check (instrument_type in ('stock', 'warrant'));
 
 do $$
 declare

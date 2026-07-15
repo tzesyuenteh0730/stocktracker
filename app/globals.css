@@ -131,6 +131,16 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stack .panel {
+  margin-bottom: 0;
+}
+
 .panel {
   padding: 16px;
   margin-bottom: 16px;
@@ -284,6 +294,13 @@ button.small {
 
 .counter-filter {
   width: min(220px, 100%);
+}
+
+.history-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
 }
 
 .history-panel td {

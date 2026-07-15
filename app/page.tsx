@@ -33,9 +33,11 @@ const normalizeSecurity = (row: Security): Security => ({
 
 const normalizeTrade = (row: Trade): Trade => ({
   ...row,
+  instrument_type: row.instrument_type ?? "stock",
   quantity: numeric(row.quantity),
   price: numeric(row.price),
   fees: numeric(row.fees),
+  warrant_code: row.warrant_code ?? null,
   allocations: row.allocations ?? [],
   notes: row.notes ?? null
 });
@@ -89,6 +91,17 @@ export default function Home() {
   const [tradeAllocations, setTradeAllocations] = useState<Record<string, string>>({});
   const [editingTradeId, setEditingTradeId] = useState<string | null>(null);
 
+  const [warrantTradeSecurityId, setWarrantTradeSecurityId] = useState("");
+  const [warrantTradeDate, setWarrantTradeDate] = useState(today);
+  const [warrantTradeType, setWarrantTradeType] = useState<"buy" | "sell">("buy");
+  const [warrantTradeQuantity, setWarrantTradeQuantity] = useState("");
+  const [warrantTradePrice, setWarrantTradePrice] = useState("");
+  const [warrantTradeFees, setWarrantTradeFees] = useState("");
+  const [warrantTradeCode, setWarrantTradeCode] = useState("");
+  const [warrantTradeNotes, setWarrantTradeNotes] = useState("");
+  const [warrantTradeAllocations, setWarrantTradeAllocations] = useState<Record<string, string>>({});
+  const [editingWarrantTradeId, setEditingWarrantTradeId] = useState<string | null>(null);
+
   const [dividendSecurityId, setDividendSecurityId] = useState("");
   const [dividendDate, setDividendDate] = useState(today);
   const [dividendType, setDividendType] = useState<Dividend["type"]>("cash");
@@ -104,6 +117,7 @@ export default function Home() {
   const [dividendAllocations, setDividendAllocations] = useState<Record<string, string>>({});
   const [editingDividendId, setEditingDividendId] = useState<string | null>(null);
   const [tradeHistoryCounter, setTradeHistoryCounter] = useState("all");
+  const [tradeHistoryInstrument, setTradeHistoryInstrument] = useState<"all" | "stock" | "warrant">("all");
   const [dividendHistoryCounter, setDividendHistoryCounter] = useState("all");
 
   const [cashDate, setCashDate] = useState(today);
@@ -128,10 +142,14 @@ export default function Home() {
     (!ledgerEndDate || entry.date <= ledgerEndDate) &&
     (ledgerType === "all" || entry.type === ledgerType)
   );
-  const filteredTrades = trades.filter((trade) => tradeHistoryCounter === "all" || trade.security_id === tradeHistoryCounter);
+  const filteredTrades = trades.filter((trade) =>
+    (tradeHistoryCounter === "all" || trade.security_id === tradeHistoryCounter) &&
+    (tradeHistoryInstrument === "all" || trade.instrument_type === tradeHistoryInstrument)
+  );
   const filteredDividends = dividends.filter((dividend) => dividendHistoryCounter === "all" || dividend.security_id === dividendHistoryCounter);
 
   const selectedTradeSecurity = securities.find((security) => security.id === tradeSecurityId);
+  const selectedWarrantTradeSecurity = securities.find((security) => security.id === warrantTradeSecurityId);
   const selectedDividendSecurity = securities.find((security) => security.id === dividendSecurityId);
 
   async function loadData() {
@@ -217,6 +235,12 @@ export default function Home() {
     setTradeAllocations(Object.fromEntries(members.map((member) => [member.id, String(share)])));
   }
 
+  function splitWarrantTradeEvenly() {
+    if (!members.length) return;
+    const share = numeric(warrantTradeQuantity) / members.length;
+    setWarrantTradeAllocations(Object.fromEntries(members.map((member) => [member.id, String(share)])));
+  }
+
   function splitDividendEvenly() {
     if (!members.length) return;
     const total = dividendType === "bonus_issue" ? numeric(grossDividend) : numeric(grossDividend) - numeric(dividendTax);
@@ -226,6 +250,7 @@ export default function Home() {
 
   function resetTradeForm() {
     setEditingTradeId(null);
+    setEditingWarrantTradeId(null);
     setTradeSecurityId("");
     setTradeDate(today);
     setTradeType("buy");
@@ -234,6 +259,20 @@ export default function Home() {
     setTradeFees("");
     setTradeNotes("");
     setTradeAllocations({});
+  }
+
+  function resetWarrantTradeForm() {
+    setEditingWarrantTradeId(null);
+    setEditingTradeId(null);
+    setWarrantTradeSecurityId("");
+    setWarrantTradeDate(today);
+    setWarrantTradeType("buy");
+    setWarrantTradeQuantity("");
+    setWarrantTradePrice("");
+    setWarrantTradeFees("");
+    setWarrantTradeCode("");
+    setWarrantTradeNotes("");
+    setWarrantTradeAllocations({});
   }
 
   async function saveTrade(event: FormEvent) {
@@ -254,10 +293,12 @@ export default function Home() {
     const trade = {
       security_id: tradeSecurityId,
       trade_date: tradeDate,
+      instrument_type: "stock" as const,
       type: tradeType,
       quantity,
       price: numeric(tradePrice),
       fees: numeric(tradeFees),
+      warrant_code: null,
       allocations,
       notes: tradeNotes.trim() || null
     };
@@ -268,6 +309,48 @@ export default function Home() {
 
     if (error) return setMessage(error.message);
     resetTradeForm();
+    await loadData();
+  }
+
+  async function saveWarrantTrade(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase || !warrantTradeSecurityId) return;
+
+    const quantity = numeric(warrantTradeQuantity);
+    const allocations = Object.entries(warrantTradeAllocations)
+      .map(([member_id, value]) => ({ member_id, quantity: numeric(value) }))
+      .filter((allocation) => allocation.quantity > 0);
+    const allocatedQuantity = allocations.reduce((sum, allocation) => sum + allocation.quantity, 0);
+
+    if (Math.abs(allocatedQuantity - quantity) > 0.0001) {
+      setMessage("Trade allocation must add up to the total trade quantity.");
+      return;
+    }
+
+    if (!warrantTradeCode.trim()) {
+      setMessage("Enter a warrant code for warrant trades.");
+      return;
+    }
+
+    const trade = {
+      security_id: warrantTradeSecurityId,
+      trade_date: warrantTradeDate,
+      instrument_type: "warrant" as const,
+      type: warrantTradeType,
+      quantity,
+      price: numeric(warrantTradePrice),
+      fees: numeric(warrantTradeFees),
+      warrant_code: warrantTradeCode.trim(),
+      allocations,
+      notes: warrantTradeNotes.trim() || null
+    };
+
+    const { error } = editingWarrantTradeId
+      ? await supabase.from("trades").update(trade).eq("id", editingWarrantTradeId)
+      : await supabase.from("trades").insert(trade);
+
+    if (error) return setMessage(error.message);
+    resetWarrantTradeForm();
     await loadData();
   }
 
@@ -381,6 +464,21 @@ export default function Home() {
   }
 
   function editTrade(trade: Trade) {
+    if (trade.instrument_type === "warrant") {
+      resetTradeForm();
+      setEditingWarrantTradeId(trade.id);
+      setWarrantTradeSecurityId(trade.security_id);
+      setWarrantTradeDate(trade.trade_date);
+      setWarrantTradeType(trade.type);
+      setWarrantTradeQuantity(String(trade.quantity));
+      setWarrantTradePrice(String(trade.price));
+      setWarrantTradeFees(String(trade.fees));
+      setWarrantTradeCode(trade.warrant_code ?? "");
+      setWarrantTradeNotes(trade.notes ?? "");
+      setWarrantTradeAllocations(Object.fromEntries(trade.allocations.map((item) => [item.member_id, String(item.quantity)])));
+      return;
+    }
+    resetWarrantTradeForm();
     setEditingTradeId(trade.id);
     setTradeSecurityId(trade.security_id);
     setTradeDate(trade.trade_date);
@@ -414,6 +512,7 @@ export default function Home() {
     const { error } = await supabase.from(table).delete().eq("id", id);
     if (error) return setMessage(error.message);
     if (table === "trades" && editingTradeId === id) resetTradeForm();
+    if (table === "trades" && editingWarrantTradeId === id) resetWarrantTradeForm();
     if (table === "dividends" && editingDividendId === id) resetDividendForm();
     await loadData();
   }
@@ -558,65 +657,138 @@ export default function Home() {
       </section>
 
       <section className="grid two">
-        <form className="panel" onSubmit={saveTrade}>
-          <h2>{editingTradeId ? "Edit trade" : "Add trade"}</h2>
-          <div className="row">
+        <div className="stack">
+          <form className="panel" onSubmit={saveTrade}>
+            <h2>{editingTradeId ? "Edit stock trade" : "Add stock trade"}</h2>
+            <div className="row">
+              <label>
+                Counter
+                <select value={tradeSecurityId} onChange={(event) => setTradeSecurityId(event.target.value)}>
+                  <option value="">Select</option>
+                  {securities.map((security) => (
+                    <option key={security.id} value={security.id}>
+                      {security.symbol}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Type
+                <select value={tradeType} onChange={(event) => setTradeType(event.target.value as "buy" | "sell")}>
+                  <option value="buy">Buy</option>
+                  <option value="sell">Sell</option>
+                </select>
+              </label>
+            </div>
+            <div className="row">
+              <label>
+                Date
+                <DateSelector value={tradeDate} onChange={setTradeDate} />
+              </label>
+              <label>
+                Quantity
+                <input inputMode="decimal" value={tradeQuantity} onChange={(event) => setTradeQuantity(event.target.value)} />
+              </label>
+            </div>
+            <div className="row">
+              <label>
+                Price
+                <input inputMode="decimal" value={tradePrice} onChange={(event) => setTradePrice(event.target.value)} />
+              </label>
+              <label>
+                Fees
+                <input inputMode="decimal" value={tradeFees} onChange={(event) => setTradeFees(event.target.value)} />
+              </label>
+            </div>
+            <AllocationInputs
+              members={members}
+              values={tradeAllocations}
+              setValues={setTradeAllocations}
+              label="Member quantity"
+              onEvenSplit={splitTradeEvenly}
+            />
             <label>
-              Counter
-              <select value={tradeSecurityId} onChange={(event) => setTradeSecurityId(event.target.value)}>
-                <option value="">Select</option>
-                {securities.map((security) => (
-                  <option key={security.id} value={security.id}>
-                    {security.symbol}
-                  </option>
-                ))}
-              </select>
+              Notes
+              <input value={tradeNotes} onChange={(event) => setTradeNotes(event.target.value)} placeholder="Optional" />
             </label>
+            <div className="form-actions">
+              <button type="submit">{editingTradeId ? "Update stock trade" : "Save stock trade"}</button>
+              {editingTradeId ? <button type="button" className="secondary" onClick={resetTradeForm}>Cancel</button> : null}
+            </div>
+            {selectedTradeSecurity ? (
+              <p className="hint">Using {selectedTradeSecurity.currency} for this counter.</p>
+            ) : null}
+          </form>
+
+          <form className="panel" onSubmit={saveWarrantTrade}>
+            <h2>{editingWarrantTradeId ? "Edit warrant trade" : "Add warrant trade"}</h2>
+            <div className="row">
+              <label>
+                Counter
+                <select value={warrantTradeSecurityId} onChange={(event) => setWarrantTradeSecurityId(event.target.value)}>
+                  <option value="">Select</option>
+                  {securities.map((security) => (
+                    <option key={security.id} value={security.id}>
+                      {security.symbol}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Type
+                <select value={warrantTradeType} onChange={(event) => setWarrantTradeType(event.target.value as "buy" | "sell")}>
+                  <option value="buy">Buy</option>
+                  <option value="sell">Sell</option>
+                </select>
+              </label>
+            </div>
+            <div className="row">
+              <label>
+                Warrant code
+                <input value={warrantTradeCode} onChange={(event) => setWarrantTradeCode(event.target.value)} placeholder="WA_ABC" />
+              </label>
+              <label>
+                Date
+                <DateSelector value={warrantTradeDate} onChange={setWarrantTradeDate} />
+              </label>
+            </div>
+            <div className="row">
+              <label>
+                Quantity
+                <input inputMode="decimal" value={warrantTradeQuantity} onChange={(event) => setWarrantTradeQuantity(event.target.value)} />
+              </label>
+              <label>
+                Price
+                <input inputMode="decimal" value={warrantTradePrice} onChange={(event) => setWarrantTradePrice(event.target.value)} />
+              </label>
+            </div>
+            <div className="row">
+              <label>
+                Fees
+                <input inputMode="decimal" value={warrantTradeFees} onChange={(event) => setWarrantTradeFees(event.target.value)} />
+              </label>
+              <div />
+            </div>
+            <AllocationInputs
+              members={members}
+              values={warrantTradeAllocations}
+              setValues={setWarrantTradeAllocations}
+              label="Member quantity"
+              onEvenSplit={splitWarrantTradeEvenly}
+            />
             <label>
-              Type
-              <select value={tradeType} onChange={(event) => setTradeType(event.target.value as "buy" | "sell")}>
-                <option value="buy">Buy</option>
-                <option value="sell">Sell</option>
-              </select>
+              Notes
+              <input value={warrantTradeNotes} onChange={(event) => setWarrantTradeNotes(event.target.value)} placeholder="Optional" />
             </label>
-          </div>
-          <div className="row">
-            <label>
-              Date
-              <DateSelector value={tradeDate} onChange={setTradeDate} />
-            </label>
-            <label>
-              Quantity
-              <input inputMode="decimal" value={tradeQuantity} onChange={(event) => setTradeQuantity(event.target.value)} />
-            </label>
-          </div>
-          <div className="row">
-            <label>
-              Price
-              <input inputMode="decimal" value={tradePrice} onChange={(event) => setTradePrice(event.target.value)} />
-            </label>
-            <label>
-              Fees
-              <input inputMode="decimal" value={tradeFees} onChange={(event) => setTradeFees(event.target.value)} />
-            </label>
-          </div>
-          <AllocationInputs
-            members={members}
-            values={tradeAllocations}
-            setValues={setTradeAllocations}
-            label="Member quantity"
-            onEvenSplit={splitTradeEvenly}
-          />
-          <label>
-            Notes
-            <input value={tradeNotes} onChange={(event) => setTradeNotes(event.target.value)} placeholder="Optional" />
-          </label>
-          <div className="form-actions">
-            <button type="submit">{editingTradeId ? "Update trade" : "Save trade"}</button>
-            {editingTradeId ? <button type="button" className="secondary" onClick={resetTradeForm}>Cancel</button> : null}
-          </div>
-          {selectedTradeSecurity ? <p className="hint">Using {selectedTradeSecurity.currency} for this counter.</p> : null}
-        </form>
+            <div className="form-actions">
+              <button type="submit">{editingWarrantTradeId ? "Update warrant trade" : "Save warrant trade"}</button>
+              {editingWarrantTradeId ? <button type="button" className="secondary" onClick={resetWarrantTradeForm}>Cancel</button> : null}
+            </div>
+            {selectedWarrantTradeSecurity ? (
+              <p className="hint">Warrant trades use the cash account and are tracked separately from stock trades.</p>
+            ) : null}
+          </form>
+        </div>
 
         <form className="panel" onSubmit={saveDividend}>
           <h2>{editingDividendId ? "Edit dividend" : "Add dividend"}</h2>
@@ -736,16 +908,30 @@ export default function Home() {
         <HistoryTable
           title="Trade history"
           emptyMessage="No trades recorded yet."
-          headers={["Date", "Counter", "Type", "Quantity", "Price", "Fees", "Allocation", "Notes", "Actions"]}
+          headers={["Date", "Counter", "Instrument", "Type", "Quantity", "Price", "Fees", "Allocation", "Notes", "Actions"]}
           isEmpty={filteredTrades.length === 0}
-          controls={<CounterFilter value={tradeHistoryCounter} onChange={setTradeHistoryCounter} securities={securities} />}
+          controls={
+            <div className="history-filters">
+              <CounterFilter value={tradeHistoryCounter} onChange={setTradeHistoryCounter} securities={securities} />
+              <label className="counter-filter">
+                Instrument
+                <select value={tradeHistoryInstrument} onChange={(event) => setTradeHistoryInstrument(event.target.value as typeof tradeHistoryInstrument)}>
+                  <option value="all">All instruments</option>
+                  <option value="stock">Stock</option>
+                  <option value="warrant">Warrant</option>
+                </select>
+              </label>
+            </div>
+          }
         >
           {filteredTrades.map((trade) => {
             const security = securities.find((item) => item.id === trade.security_id);
+            const instrumentLabel = trade.instrument_type === "warrant" ? `Warrant ${trade.warrant_code ?? ""}`.trim() : "Stock";
             return (
               <tr key={trade.id}>
                 <td>{trade.trade_date}</td>
                 <td>{security?.symbol ?? "Unknown"}</td>
+                <td>{instrumentLabel}</td>
                 <td className={trade.type === "buy" ? "" : "loss"}>{trade.type}</td>
                 <td>{formatNumber(trade.quantity)}</td>
                 <td>{formatMoney(trade.price, security?.currency)}</td>
@@ -1081,7 +1267,7 @@ function DateSelector({
   const year = Number.isFinite(yearValue) && yearValue > 0 ? yearValue : currentYear;
   const month = Number.isFinite(monthValue) && monthValue >= 1 && monthValue <= 12 ? monthValue : 1;
   const day = Number.isFinite(dayValue) && dayValue >= 1 ? dayValue : 1;
-  const years = Array.from(new Set([year, ...Array.from({ length: 22 }, (_, index) => currentYear + 1 - index)])).sort((a, b) => b - a);
+  const years = Array.from(new Set([year, ...Array.from({ length: 101 }, (_, index) => currentYear + 50 - index)])).sort((a, b) => b - a);
   const daysInMonth = new Date(year, month, 0).getDate();
 
   const updateDate = (nextYear: number, nextMonth: number, nextDay: number) => {

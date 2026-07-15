@@ -31,10 +31,12 @@ export type Trade = {
   id: string;
   security_id: string;
   trade_date: string;
+  instrument_type: "stock" | "warrant";
   type: "buy" | "sell";
   quantity: number;
   price: number;
   fees: number;
+  warrant_code: string | null;
   allocations: Allocation[];
   notes: string | null;
   created_at?: string;

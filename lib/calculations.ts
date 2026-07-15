@@ -39,8 +39,14 @@ export function buildPortfolioSummary(
   const memberMap = new Map(members.map((member) => [member.id, member]));
   const securityMap = new Map(securities.map((security) => [security.id, security]));
   const lots = new Map<string, RunningLot>();
+  const warrantLots = new Map<string, RunningLot>();
   const dividendTotals = new Map<string, number>();
   const warrantTotals = new Map<string, WarrantHolding>();
+  const warrantMeta = new Map<
+    string,
+    Pick<WarrantHolding, "warrantCode" | "parentSecurity" | "exercisePrice" | "marketPrice" | "expiryDate" | "status">
+  >();
+  const warrantLatestTradePrice = new Map<string, number>();
   const today = new Date().toISOString().slice(0, 10);
 
   const keyFor = (securityId: string, memberId: string) => `${securityId}:${memberId}`;
@@ -53,18 +59,77 @@ export function buildPortfolioSummary(
     lots.set(key, next);
     return next;
   };
+  const getWarrantLot = (warrantCode: string, memberId: string) => {
+    const key = `${warrantCode}:${memberId}`;
+    const current = warrantLots.get(key);
+    if (current) return current;
+
+    const next = { quantity: 0, costBasis: 0, realizedPnL: 0 };
+    warrantLots.set(key, next);
+    return next;
+  };
 
   const portfolioEvents = [
-    ...trades.map((trade) => ({ kind: "trade" as const, date: trade.trade_date, item: trade, order: 1 })),
+    ...trades.map((trade) => ({ kind: "trade" as const, date: trade.trade_date, item: trade, order: trade.instrument_type === "warrant" ? 2 : 1 })),
     ...dividends
       .filter((dividend) => dividend.type === "bonus_issue")
       .map((dividend) => ({ kind: "bonus_issue" as const, date: dividend.dividend_date, item: dividend, order: 0 }))
+    ,
+    ...dividends
+      .filter((dividend) => dividend.type === "warrant_bonus")
+      .map((dividend) => ({ kind: "warrant_bonus" as const, date: dividend.dividend_date, item: dividend, order: 0 }))
   ].sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order);
 
   for (const event of portfolioEvents) {
     if (event.kind === "trade") {
       const trade = event.item;
       if (!securityMap.has(trade.security_id) || trade.quantity <= 0) continue;
+
+      if (trade.instrument_type === "warrant") {
+        const warrantCode = trade.warrant_code?.trim();
+        if (!warrantCode) continue;
+
+        warrantLatestTradePrice.set(warrantCode, trade.price);
+        warrantMeta.set(
+          warrantCode,
+          warrantMeta.get(warrantCode) ?? {
+            warrantCode,
+            parentSecurity: securityMap.get(trade.security_id)!,
+            exercisePrice: 0,
+            marketPrice: trade.price,
+            expiryDate: null,
+            status: "Active"
+          }
+        );
+
+        for (const allocation of trade.allocations ?? []) {
+          if (!memberMap.has(allocation.member_id) || allocation.quantity <= 0) continue;
+
+          const lot = getWarrantLot(warrantCode, allocation.member_id);
+          const allocationRatio = allocation.quantity / trade.quantity;
+          const feeShare = money(trade.fees) * allocationRatio;
+
+          if (trade.type === "buy") {
+            lot.quantity += allocation.quantity;
+            lot.costBasis += allocation.quantity * trade.price + feeShare;
+          } else {
+            const sellQuantity = Math.min(allocation.quantity, lot.quantity);
+            const averageCost = lot.quantity > 0 ? lot.costBasis / lot.quantity : 0;
+            const proceeds = sellQuantity * trade.price - feeShare;
+            const releasedCost = averageCost * sellQuantity;
+
+            lot.quantity -= sellQuantity;
+            lot.costBasis -= releasedCost;
+            lot.realizedPnL += proceeds - releasedCost;
+
+            if (lot.quantity < 0.000001) {
+              lot.quantity = 0;
+              lot.costBasis = 0;
+            }
+          }
+        }
+        continue;
+      }
 
       for (const allocation of trade.allocations ?? []) {
         if (!memberMap.has(allocation.member_id) || allocation.quantity <= 0) continue;
@@ -99,39 +164,45 @@ export function buildPortfolioSummary(
     if (!securityMap.has(dividend.security_id)) continue;
 
     if (dividend.type === "warrant_bonus") {
-      const securityLots = [...lots.entries()].filter(([key]) => key.startsWith(`${dividend.security_id}:`));
-      const totalQuantity = securityLots.reduce((sum, [, lot]) => sum + lot.quantity, 0);
+      const parentSecurity = securityMap.get(dividend.security_id);
+      if (!parentSecurity) continue;
+
+      const warrantCode = dividend.warrant_code?.trim() || `WARRANT-${parentSecurity.symbol ?? dividend.security_id}-${dividend.dividend_date}`;
       const warrantQuantity = money(dividend.warrant_quantity_received ?? dividend.gross_amount);
-      const warrantCode = dividend.warrant_code?.trim() || `WARRANT-${securityMap.get(dividend.security_id)?.symbol ?? dividend.security_id}-${dividend.dividend_date}`;
       const exercisePrice = money(dividend.exercise_price ?? 0);
       const marketPrice = dividend.market_price == null ? null : money(dividend.market_price);
       const expiryDate = dividend.expiry_date ?? null;
       const status: WarrantHolding["status"] = expiryDate && expiryDate < today ? "Expired" : "Active";
 
-      if (totalQuantity > 0 && warrantQuantity > 0) {
-        const aggregate =
-          warrantTotals.get(warrantCode) ??
-          {
-            warrantCode,
-            parentSecurity: securityMap.get(dividend.security_id)!,
-            quantityHeld: 0,
-            exercisePrice,
-            marketPrice,
-            marketValue: null,
-            unrealizedGainLoss: null,
-            expiryDate,
-            status
-          };
+      warrantMeta.set(warrantCode, {
+        warrantCode,
+        parentSecurity,
+        exercisePrice,
+        marketPrice,
+        expiryDate,
+        status
+      });
 
-        const ratio = warrantQuantity / totalQuantity;
-        aggregate.quantityHeld += securityLots.reduce((sum, [, lot]) => sum + lot.quantity * ratio, 0);
-        aggregate.exercisePrice = exercisePrice;
-        aggregate.marketPrice = marketPrice;
-        aggregate.marketValue = marketPrice == null ? null : aggregate.quantityHeld * marketPrice;
-        aggregate.unrealizedGainLoss = marketPrice == null ? null : aggregate.quantityHeld * (marketPrice - exercisePrice);
-        aggregate.expiryDate = expiryDate;
-        aggregate.status = status;
-        warrantTotals.set(warrantCode, aggregate);
+      const stockLots = [...lots.entries()].filter(([key]) => key.startsWith(`${dividend.security_id}:`));
+      const totalQuantity = stockLots.reduce((sum, [, lot]) => sum + lot.quantity, 0);
+      if (totalQuantity > 0 && warrantQuantity > 0) {
+        for (const [key, lot] of stockLots) {
+          const memberId = key.split(":")[1];
+          const warrantLot = getWarrantLot(warrantCode, memberId);
+          warrantLot.quantity += warrantQuantity * (lot.quantity / totalQuantity);
+        }
+      } else if (warrantQuantity > 0) {
+        warrantTotals.set(warrantCode, {
+          warrantCode,
+          parentSecurity,
+          quantityHeld: warrantQuantity,
+          exercisePrice,
+          marketPrice,
+          marketValue: marketPrice == null ? null : warrantQuantity * marketPrice,
+          unrealizedGainLoss: marketPrice == null ? null : warrantQuantity * (marketPrice - exercisePrice),
+          expiryDate,
+          status
+        });
       }
       continue;
     }
@@ -276,6 +347,39 @@ export function buildPortfolioSummary(
     securityTotal.costPricePerUnit = securityTotal.quantity > 0 ? securityTotal.costBasis / securityTotal.quantity : 0;
   }
 
+  for (const [key, lot] of warrantLots.entries()) {
+    const [warrantCode] = key.split(":");
+    const meta = warrantMeta.get(warrantCode);
+    if (!meta) continue;
+
+    const aggregate =
+      warrantTotals.get(warrantCode) ??
+      {
+        warrantCode,
+        parentSecurity: meta.parentSecurity,
+        quantityHeld: 0,
+        exercisePrice: meta.exercisePrice,
+        marketPrice: meta.marketPrice ?? warrantLatestTradePrice.get(warrantCode) ?? null,
+        marketValue: null,
+        unrealizedGainLoss: null,
+        expiryDate: meta.expiryDate,
+        status: meta.status
+      };
+
+    aggregate.quantityHeld += lot.quantity;
+    aggregate.exercisePrice = meta.exercisePrice;
+    aggregate.marketPrice = meta.marketPrice ?? warrantLatestTradePrice.get(warrantCode) ?? aggregate.marketPrice;
+    aggregate.expiryDate = meta.expiryDate;
+    aggregate.status = meta.status;
+    warrantTotals.set(warrantCode, aggregate);
+  }
+
+  for (const aggregate of warrantTotals.values()) {
+    aggregate.marketValue = aggregate.marketPrice == null ? null : aggregate.quantityHeld * aggregate.marketPrice;
+    aggregate.unrealizedGainLoss =
+      aggregate.marketPrice == null ? null : aggregate.quantityHeld * (aggregate.marketPrice - aggregate.exercisePrice);
+  }
+
   return {
     memberPositions: memberPositions.sort((a, b) =>
       `${a.security.symbol}:${a.member.name}`.localeCompare(`${b.security.symbol}:${b.member.name}`)
@@ -324,11 +428,12 @@ export function buildCashLedger(
       const security = securityMap.get(trade.security_id);
       const amount = Math.abs(cashImpactForTrade(trade));
       const isBuy = trade.type === "buy";
+      const instrumentLabel = trade.instrument_type === "warrant" ? "Warrant" : "Stock";
       return {
         id: `trade:${trade.id}`,
         date: trade.trade_date,
         type: trade.type,
-        description: `${isBuy ? "Buy" : "Sell"} ${trade.quantity} ${security?.symbol ?? "counter"}${trade.notes ? ` — ${trade.notes}` : ""}`,
+        description: `${isBuy ? "Buy" : "Sell"} ${instrumentLabel} ${trade.quantity} ${trade.instrument_type === "warrant" ? (trade.warrant_code ?? security?.symbol ?? "warrant") : (security?.symbol ?? "counter")}${trade.notes ? ` — ${trade.notes}` : ""}`,
         debit: isBuy ? amount : 0,
         credit: isBuy ? 0 : amount,
         createdBy: "Trade entry"
