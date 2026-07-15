@@ -1,9 +1,9 @@
 "use client";
 
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
-import { buildCashLedger, buildPortfolioSummary, formatMoney, formatNumber } from "@/lib/calculations";
+import { buildBrokerPortfolioSummaries, buildCashLedger, formatMoney, formatNumber } from "@/lib/calculations";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
-import type { CashTransaction, Dividend, DividendAllocation, Member, Security, Trade } from "@/lib/types";
+import type { BrokerAccount, CashTransaction, Dividend, DividendAllocation, Member, Security, Trade } from "@/lib/types";
 
 const today = new Date().toISOString().slice(0, 10);
 const monthNames = [
@@ -31,8 +31,16 @@ const normalizeSecurity = (row: Security): Security => ({
   current_price: numeric(row.current_price)
 });
 
+const normalizeBrokerAccount = (row: BrokerAccount): BrokerAccount => ({
+  ...row,
+  account_number: row.account_number ?? null,
+  opening_balance: numeric(row.opening_balance),
+  status: row.status ?? "Active"
+});
+
 const normalizeTrade = (row: Trade): Trade => ({
   ...row,
+  broker_account_id: row.broker_account_id ?? null,
   instrument_type: row.instrument_type ?? "stock",
   quantity: numeric(row.quantity),
   price: numeric(row.price),
@@ -44,6 +52,7 @@ const normalizeTrade = (row: Trade): Trade => ({
 
 const normalizeDividend = (row: Dividend): Dividend => ({
   ...row,
+  broker_account_id: row.broker_account_id ?? null,
   type: row.type ?? "cash",
   gross_amount: numeric(row.gross_amount),
   tax: numeric(row.tax),
@@ -59,6 +68,7 @@ const normalizeDividend = (row: Dividend): Dividend => ({
 
 const normalizeCashTransaction = (row: CashTransaction): CashTransaction => ({
   ...row,
+  broker_account_id: row.broker_account_id ?? null,
   amount: numeric(row.amount),
   reference: row.reference ?? null,
   created_by: row.created_by || "Manual entry"
@@ -67,6 +77,7 @@ const normalizeCashTransaction = (row: CashTransaction): CashTransaction => ({
 export default function Home() {
   const [members, setMembers] = useState<Member[]>([]);
   const [securities, setSecurities] = useState<Security[]>([]);
+  const [brokerAccounts, setBrokerAccounts] = useState<BrokerAccount[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [dividends, setDividends] = useState<Dividend[]>([]);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
@@ -81,6 +92,14 @@ export default function Home() {
   const [currency, setCurrency] = useState("MYR");
   const [currentPrice, setCurrentPrice] = useState("");
 
+  const [brokerAccountName, setBrokerAccountName] = useState("");
+  const [brokerType, setBrokerType] = useState<BrokerAccount["broker_type"]>("Webull");
+  const [brokerAccountNumber, setBrokerAccountNumber] = useState("");
+  const [brokerCurrency, setBrokerCurrency] = useState("MYR");
+  const [brokerOpeningBalance, setBrokerOpeningBalance] = useState("");
+  const [brokerStatus, setBrokerStatus] = useState<BrokerAccount["status"]>("Active");
+
+  const [tradeBrokerAccountId, setTradeBrokerAccountId] = useState("");
   const [tradeSecurityId, setTradeSecurityId] = useState("");
   const [tradeDate, setTradeDate] = useState(today);
   const [tradeType, setTradeType] = useState<"buy" | "sell">("buy");
@@ -92,6 +111,7 @@ export default function Home() {
   const [editingTradeId, setEditingTradeId] = useState<string | null>(null);
 
   const [warrantTradeSecurityId, setWarrantTradeSecurityId] = useState("");
+  const [warrantTradeBrokerAccountId, setWarrantTradeBrokerAccountId] = useState("");
   const [warrantTradeDate, setWarrantTradeDate] = useState(today);
   const [warrantTradeType, setWarrantTradeType] = useState<"buy" | "sell">("buy");
   const [warrantTradeQuantity, setWarrantTradeQuantity] = useState("");
@@ -103,6 +123,7 @@ export default function Home() {
   const [editingWarrantTradeId, setEditingWarrantTradeId] = useState<string | null>(null);
 
   const [dividendSecurityId, setDividendSecurityId] = useState("");
+  const [dividendBrokerAccountId, setDividendBrokerAccountId] = useState("");
   const [dividendDate, setDividendDate] = useState(today);
   const [dividendType, setDividendType] = useState<Dividend["type"]>("cash");
   const [grossDividend, setGrossDividend] = useState("");
@@ -121,22 +142,43 @@ export default function Home() {
   const [dividendHistoryCounter, setDividendHistoryCounter] = useState("all");
 
   const [cashDate, setCashDate] = useState(today);
+  const [cashBrokerAccountId, setCashBrokerAccountId] = useState("");
   const [cashType, setCashType] = useState<"deposit" | "withdrawal">("deposit");
   const [cashAmount, setCashAmount] = useState("");
   const [cashReference, setCashReference] = useState("");
   const [cashCreatedBy, setCashCreatedBy] = useState("Manual entry");
   const [ledgerStartDate, setLedgerStartDate] = useState("");
   const [ledgerEndDate, setLedgerEndDate] = useState("");
-  const [ledgerType, setLedgerType] = useState<"all" | "deposit" | "withdrawal" | "buy" | "sell">("all");
+  const [ledgerBrokerAccountId, setLedgerBrokerAccountId] = useState<"all" | string>("all");
+  const [ledgerType, setLedgerType] = useState<"all" | "deposit" | "withdrawal" | "buy" | "sell" | "dividend">("all");
 
-  const summary = useMemo(
-    () => buildPortfolioSummary(members, securities, trades, dividends, cashTransactions),
-    [members, securities, trades, dividends, cashTransactions]
+  const portfolioSummaryData = useMemo(
+    () => buildBrokerPortfolioSummaries(members, securities, trades, dividends, cashTransactions, brokerAccounts),
+    [members, securities, trades, dividends, cashTransactions, brokerAccounts]
   );
-  const cashLedger = useMemo(
-    () => buildCashLedger(cashTransactions, trades, securities),
-    [cashTransactions, trades, securities]
+  const summary = portfolioSummaryData.consolidated;
+  const brokerSummaries = portfolioSummaryData.brokerSummaries;
+  const cashLedger = useMemo(() => {
+    const brokerFilteredTrades = ledgerBrokerAccountId === "all"
+      ? trades
+      : trades.filter((trade) => (trade.broker_account_id ?? "unassigned") === ledgerBrokerAccountId);
+    const brokerFilteredCash = ledgerBrokerAccountId === "all"
+      ? cashTransactions
+      : cashTransactions.filter((transaction) => (transaction.broker_account_id ?? "unassigned") === ledgerBrokerAccountId);
+    const openingBalance = ledgerBrokerAccountId === "all"
+      ? brokerAccounts.reduce((sum, broker) => sum + numeric(broker.opening_balance), 0)
+      : brokerAccounts.find((broker) => broker.id === ledgerBrokerAccountId)?.opening_balance ?? 0;
+    const brokerFilteredDividends = ledgerBrokerAccountId === "all"
+      ? dividends
+      : dividends.filter((dividend) => (dividend.broker_account_id ?? "unassigned") === ledgerBrokerAccountId);
+    return buildCashLedger(brokerFilteredCash, brokerFilteredTrades, brokerFilteredDividends, securities, openingBalance);
+  }, [cashTransactions, trades, dividends, securities, brokerAccounts, ledgerBrokerAccountId]);
+  const cashLedgerBalance = cashLedger.length ? cashLedger[cashLedger.length - 1].runningBalance : (
+    ledgerBrokerAccountId === "all"
+      ? brokerAccounts.reduce((sum, broker) => sum + numeric(broker.opening_balance), 0)
+      : brokerAccounts.find((broker) => broker.id === ledgerBrokerAccountId)?.opening_balance ?? 0
   );
+  const defaultBrokerAccountId = brokerAccounts.find((broker) => broker.status === "Active")?.id ?? brokerAccounts[0]?.id ?? "";
   const filteredCashLedger = cashLedger.filter((entry) =>
     (!ledgerStartDate || entry.date >= ledgerStartDate) &&
     (!ledgerEndDate || entry.date <= ledgerEndDate) &&
@@ -151,21 +193,24 @@ export default function Home() {
   const selectedTradeSecurity = securities.find((security) => security.id === tradeSecurityId);
   const selectedWarrantTradeSecurity = securities.find((security) => security.id === warrantTradeSecurityId);
   const selectedDividendSecurity = securities.find((security) => security.id === dividendSecurityId);
+  const brokerAccountLabel = (id: string | null) =>
+    brokerAccounts.find((broker) => broker.id === id)?.account_name ?? (id ? "Unassigned" : "Unassigned");
 
   async function loadData() {
     if (!supabase) return;
     setLoadState("loading");
     setMessage("");
 
-    const [membersResult, securitiesResult, tradesResult, dividendsResult, cashResult] = await Promise.all([
+    const [membersResult, securitiesResult, brokersResult, tradesResult, dividendsResult, cashResult] = await Promise.all([
       supabase.from("members").select("*").order("created_at", { ascending: true }),
       supabase.from("securities").select("*").order("symbol", { ascending: true }),
+      supabase.from("broker_accounts").select("*").order("created_at", { ascending: true }),
       supabase.from("trades").select("*").order("trade_date", { ascending: false }),
       supabase.from("dividends").select("*").order("dividend_date", { ascending: false }),
       supabase.from("cash_transactions").select("*").order("transaction_date", { ascending: false })
     ]);
 
-    const coreError = membersResult.error ?? securitiesResult.error ?? tradesResult.error ?? dividendsResult.error;
+    const coreError = membersResult.error ?? securitiesResult.error ?? brokersResult.error ?? tradesResult.error ?? dividendsResult.error;
     if (coreError) {
       setLoadState("error");
       setMessage(coreError.message);
@@ -174,6 +219,7 @@ export default function Home() {
 
     setMembers((membersResult.data ?? []).map(normalizeMember));
     setSecurities((securitiesResult.data ?? []).map(normalizeSecurity));
+    setBrokerAccounts((brokersResult.data ?? []).map(normalizeBrokerAccount));
     setTrades((tradesResult.data ?? []).map(normalizeTrade));
     setDividends((dividendsResult.data ?? []).map(normalizeDividend));
     if (cashResult.error) {
@@ -181,6 +227,14 @@ export default function Home() {
       setMessage("Cash account is unavailable until the cash_transactions migration is run in Supabase.");
     } else {
       setCashTransactions((cashResult.data ?? []).map(normalizeCashTransaction));
+    }
+
+    const activeBroker = (brokersResult.data ?? []).map(normalizeBrokerAccount).find((broker) => broker.status === "Active") ?? (brokersResult.data ?? []).map(normalizeBrokerAccount)[0];
+    if (activeBroker) {
+      if (!tradeBrokerAccountId) setTradeBrokerAccountId(activeBroker.id);
+      if (!warrantTradeBrokerAccountId) setWarrantTradeBrokerAccountId(activeBroker.id);
+      if (!dividendBrokerAccountId) setDividendBrokerAccountId(activeBroker.id);
+      if (!cashBrokerAccountId) setCashBrokerAccountId(activeBroker.id);
     }
     setLoadState("ready");
   }
@@ -222,6 +276,29 @@ export default function Home() {
     await loadData();
   }
 
+  async function addBrokerAccount(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase || !brokerAccountName.trim()) return;
+
+    const { error } = await supabase.from("broker_accounts").insert({
+      account_name: brokerAccountName.trim(),
+      broker_type: brokerType,
+      account_number: brokerAccountNumber.trim() || null,
+      currency: brokerCurrency.trim().toUpperCase() || "MYR",
+      opening_balance: numeric(brokerOpeningBalance),
+      status: brokerStatus
+    });
+
+    if (error) return setMessage(describeSupabaseError(error));
+    setBrokerAccountName("");
+    setBrokerType("Webull");
+    setBrokerAccountNumber("");
+    setBrokerCurrency("MYR");
+    setBrokerOpeningBalance("");
+    setBrokerStatus("Active");
+    await loadData();
+  }
+
   async function updateSecurity(security: Security, patch: Partial<Security>) {
     if (!supabase) return;
     const { error } = await supabase.from("securities").update(patch).eq("id", security.id);
@@ -251,6 +328,7 @@ export default function Home() {
   function resetTradeForm() {
     setEditingTradeId(null);
     setEditingWarrantTradeId(null);
+    setTradeBrokerAccountId(defaultBrokerAccountId);
     setTradeSecurityId("");
     setTradeDate(today);
     setTradeType("buy");
@@ -264,6 +342,7 @@ export default function Home() {
   function resetWarrantTradeForm() {
     setEditingWarrantTradeId(null);
     setEditingTradeId(null);
+    setWarrantTradeBrokerAccountId(defaultBrokerAccountId);
     setWarrantTradeSecurityId("");
     setWarrantTradeDate(today);
     setWarrantTradeType("buy");
@@ -277,7 +356,7 @@ export default function Home() {
 
   async function saveTrade(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !tradeSecurityId) return;
+    if (!supabase || !tradeBrokerAccountId || !tradeSecurityId) return;
 
     const quantity = numeric(tradeQuantity);
     const allocations = Object.entries(tradeAllocations)
@@ -291,6 +370,7 @@ export default function Home() {
     }
 
     const trade = {
+      broker_account_id: tradeBrokerAccountId,
       security_id: tradeSecurityId,
       trade_date: tradeDate,
       type: tradeType,
@@ -312,7 +392,7 @@ export default function Home() {
 
   async function saveWarrantTrade(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !warrantTradeSecurityId) return;
+    if (!supabase || !warrantTradeBrokerAccountId || !warrantTradeSecurityId) return;
 
     const quantity = numeric(warrantTradeQuantity);
     const allocations = Object.entries(warrantTradeAllocations)
@@ -331,6 +411,7 @@ export default function Home() {
     }
 
     const trade = {
+      broker_account_id: warrantTradeBrokerAccountId,
       security_id: warrantTradeSecurityId,
       trade_date: warrantTradeDate,
       instrument_type: "warrant" as const,
@@ -354,7 +435,7 @@ export default function Home() {
 
   async function addCashTransaction(event: FormEvent) {
     event.preventDefault();
-    if (!supabase) return;
+    if (!supabase || !cashBrokerAccountId) return;
 
     const amount = numeric(cashAmount);
     if (amount <= 0) {
@@ -362,6 +443,7 @@ export default function Home() {
       return;
     }
     const { error } = await supabase.from("cash_transactions").insert({
+      broker_account_id: cashBrokerAccountId,
       transaction_date: cashDate,
       type: cashType,
       amount,
@@ -376,6 +458,7 @@ export default function Home() {
 
   function resetDividendForm() {
     setEditingDividendId(null);
+    setDividendBrokerAccountId(defaultBrokerAccountId);
     setDividendSecurityId("");
     setDividendDate(today);
     setDividendType("cash");
@@ -393,7 +476,7 @@ export default function Home() {
 
   async function saveDividend(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !dividendSecurityId) return;
+    if (!supabase || !dividendBrokerAccountId || !dividendSecurityId) return;
 
     const bonusShares = numeric(grossDividend);
     if (dividendType === "bonus_issue" && bonusShares <= 0) {
@@ -438,6 +521,7 @@ export default function Home() {
     }
 
     const dividend = {
+      broker_account_id: dividendBrokerAccountId,
       security_id: dividendSecurityId,
       dividend_date: dividendDate,
       type: dividendType,
@@ -471,6 +555,7 @@ export default function Home() {
     if (trade.instrument_type === "warrant") {
       resetTradeForm();
       setEditingWarrantTradeId(trade.id);
+      setWarrantTradeBrokerAccountId(trade.broker_account_id ?? defaultBrokerAccountId);
       setWarrantTradeSecurityId(trade.security_id);
       setWarrantTradeDate(trade.trade_date);
       setWarrantTradeType(trade.type);
@@ -484,6 +569,7 @@ export default function Home() {
     }
     resetWarrantTradeForm();
     setEditingTradeId(trade.id);
+    setTradeBrokerAccountId(trade.broker_account_id ?? defaultBrokerAccountId);
     setTradeSecurityId(trade.security_id);
     setTradeDate(trade.trade_date);
     setTradeType(trade.type);
@@ -496,6 +582,7 @@ export default function Home() {
 
   function editDividend(dividend: Dividend) {
     setEditingDividendId(dividend.id);
+    setDividendBrokerAccountId(dividend.broker_account_id ?? defaultBrokerAccountId);
     setDividendSecurityId(dividend.security_id);
     setDividendDate(dividend.dividend_date);
     setDividendType(dividend.type);
@@ -552,6 +639,45 @@ export default function Home() {
       </section>
 
       <section className="panel">
+        <div className="section-heading">
+          <h2>Broker performance</h2>
+          <strong>Consolidated view across all brokers</strong>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Broker</th>
+                <th>Cash balance</th>
+                <th>Holdings value</th>
+                <th>Total invested</th>
+                <th>Realized P/L</th>
+                <th>Unrealized P/L</th>
+                <th>Total return</th>
+                <th>Return %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {brokerSummaries.length ? brokerSummaries.map((row) => (
+                <tr key={row.brokerAccount.id}>
+                  <td>{row.brokerAccount.account_name}</td>
+                  <td>{formatMoney(row.summary.cashBalance, row.brokerAccount.currency)}</td>
+                  <td>{formatMoney(row.holdingsValue, row.brokerAccount.currency)}</td>
+                  <td>{formatMoney(row.totalInvested, row.brokerAccount.currency)}</td>
+                  <td className={tone(row.realizedPnL)}>{formatMoney(row.realizedPnL, row.brokerAccount.currency)}</td>
+                  <td className={tone(row.unrealizedPnL)}>{formatMoney(row.unrealizedPnL, row.brokerAccount.currency)}</td>
+                  <td className={tone(row.totalReturn)}>{formatMoney(row.totalReturn, row.brokerAccount.currency)}</td>
+                  <td className={tone(row.totalReturnPct)}>{formatNumber(row.totalReturnPct)}%</td>
+                </tr>
+              )) : (
+                <tr><td colSpan={8} className="empty">Add a broker account to see broker-level performance.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
         <h2>Member pool holding</h2>
         <div className="table-wrap">
           <table>
@@ -593,6 +719,17 @@ export default function Home() {
           </div>
         </div>
         <div className="cash-form-grid">
+          <label>
+            Broker account
+            <select value={cashBrokerAccountId} onChange={(event) => setCashBrokerAccountId(event.target.value)}>
+              <option value="">Select</option>
+              {brokerAccounts.map((broker) => (
+                <option key={broker.id} value={broker.id}>
+                  {broker.account_name}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             Transaction date
             <DateSelector value={cashDate} onChange={setCashDate} />
@@ -661,10 +798,97 @@ export default function Home() {
       </section>
 
       <section className="grid two">
+        <form className="panel" onSubmit={addBrokerAccount}>
+          <h2>Add broker account</h2>
+          <div className="row">
+            <label>
+              Account name
+              <input value={brokerAccountName} onChange={(event) => setBrokerAccountName(event.target.value)} placeholder="Main Webull" />
+            </label>
+            <label>
+              Broker type
+              <select value={brokerType} onChange={(event) => setBrokerType(event.target.value as BrokerAccount["broker_type"])}>
+                <option value="Webull">Webull</option>
+                <option value="Moomoo">Moomoo</option>
+                <option value="IBKR">IBKR</option>
+                <option value="Tiger">Tiger</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </label>
+          </div>
+          <div className="row">
+            <label>
+              Account number
+              <input value={brokerAccountNumber} onChange={(event) => setBrokerAccountNumber(event.target.value)} placeholder="Optional" />
+            </label>
+            <label>
+              Currency
+              <input value={brokerCurrency} onChange={(event) => setBrokerCurrency(event.target.value)} placeholder="USD" />
+            </label>
+          </div>
+          <div className="row">
+            <label>
+              Opening balance
+              <input inputMode="decimal" value={brokerOpeningBalance} onChange={(event) => setBrokerOpeningBalance(event.target.value)} placeholder="0.00" />
+            </label>
+            <label>
+              Status
+              <select value={brokerStatus} onChange={(event) => setBrokerStatus(event.target.value as BrokerAccount["status"])}>
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
+              </select>
+            </label>
+          </div>
+          <button type="submit">Add broker account</button>
+        </form>
+
+        <section className="panel">
+          <h2>Broker accounts</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th>Type</th>
+                  <th>Currency</th>
+                  <th>Opening balance</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {brokerAccounts.length ? brokerAccounts.map((broker) => (
+                  <tr key={broker.id}>
+                    <td>{broker.account_name}{broker.account_number ? ` (${broker.account_number})` : ""}</td>
+                    <td>{broker.broker_type}</td>
+                    <td>{broker.currency}</td>
+                    <td>{formatMoney(broker.opening_balance, broker.currency)}</td>
+                    <td>{broker.status}</td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={5} className="empty">No broker accounts yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section className="grid two">
         <div className="stack">
           <form className="panel" onSubmit={saveTrade}>
             <h2>{editingTradeId ? "Edit stock trade" : "Add stock trade"}</h2>
             <div className="row">
+              <label>
+                Broker account
+                <select value={tradeBrokerAccountId} onChange={(event) => setTradeBrokerAccountId(event.target.value)}>
+                  <option value="">Select</option>
+                  {brokerAccounts.map((broker) => (
+                    <option key={broker.id} value={broker.id}>
+                      {broker.account_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>
                 Counter
                 <select value={tradeSecurityId} onChange={(event) => setTradeSecurityId(event.target.value)}>
@@ -727,6 +951,17 @@ export default function Home() {
           <form className="panel" onSubmit={saveWarrantTrade}>
             <h2>{editingWarrantTradeId ? "Edit warrant trade" : "Add warrant trade"}</h2>
             <div className="row">
+              <label>
+                Broker account
+                <select value={warrantTradeBrokerAccountId} onChange={(event) => setWarrantTradeBrokerAccountId(event.target.value)}>
+                  <option value="">Select</option>
+                  {brokerAccounts.map((broker) => (
+                    <option key={broker.id} value={broker.id}>
+                      {broker.account_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>
                 Counter
                 <select value={warrantTradeSecurityId} onChange={(event) => setWarrantTradeSecurityId(event.target.value)}>
@@ -797,6 +1032,17 @@ export default function Home() {
         <form className="panel" onSubmit={saveDividend}>
           <h2>{editingDividendId ? "Edit dividend" : "Add dividend"}</h2>
           <div className="row">
+            <label>
+              Broker account
+              <select value={dividendBrokerAccountId} onChange={(event) => setDividendBrokerAccountId(event.target.value)}>
+                <option value="">Select</option>
+                {brokerAccounts.map((broker) => (
+                  <option key={broker.id} value={broker.id}>
+                    {broker.account_name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               Counter
               <select value={dividendSecurityId} onChange={(event) => setDividendSecurityId(event.target.value)}>
@@ -912,7 +1158,7 @@ export default function Home() {
         <HistoryTable
           title="Trade history"
           emptyMessage="No trades recorded yet."
-          headers={["Date", "Counter", "Instrument", "Type", "Quantity", "Price", "Fees", "Allocation", "Notes", "Actions"]}
+          headers={["Date", "Broker", "Counter", "Instrument", "Type", "Quantity", "Price", "Fees", "Allocation", "Notes", "Actions"]}
           isEmpty={filteredTrades.length === 0}
           controls={
             <div className="history-filters">
@@ -934,6 +1180,7 @@ export default function Home() {
             return (
               <tr key={trade.id}>
                 <td>{trade.trade_date}</td>
+                <td>{brokerAccountLabel(trade.broker_account_id)}</td>
                 <td>{security?.symbol ?? "Unknown"}</td>
                 <td>{instrumentLabel}</td>
                 <td className={trade.type === "buy" ? "" : "loss"}>{trade.type}</td>
@@ -954,7 +1201,7 @@ export default function Home() {
         <HistoryTable
           title="Dividend history"
           emptyMessage="No dividends recorded yet."
-          headers={["Date", "Counter", "Type", "Gross", "Tax", "Net", "Allocation", "Notes", "Actions"]}
+          headers={["Date", "Broker", "Counter", "Type", "Gross", "Tax", "Net", "Allocation", "Notes", "Actions"]}
           isEmpty={filteredDividends.length === 0}
           controls={<CounterFilter value={dividendHistoryCounter} onChange={setDividendHistoryCounter} securities={securities} />}
         >
@@ -976,6 +1223,7 @@ export default function Home() {
             return (
               <tr key={dividend.id}>
                 <td>{dividend.dividend_date}</td>
+                <td>{brokerAccountLabel(dividend.broker_account_id)}</td>
                 <td>{security?.symbol ?? "Unknown"}</td>
                 <td>{dividendTypeLabel(dividend.type)}</td>
                 <td>{isBonusIssue || isWarrantBonus ? formatNumber(dividend.gross_amount) : formatMoney(dividend.gross_amount, security?.currency)}</td>
@@ -1033,6 +1281,7 @@ export default function Home() {
 
       <section className="panel">
         <h2>Warrant holdings</h2>
+        <p className="hint">Warrants received from a warrant bonus are treated as zero-cost holdings, so their current value is counted as profit until they are exercised or sold.</p>
         <div className="table-wrap">
           <table>
             <thead>
@@ -1119,9 +1368,20 @@ export default function Home() {
             <h2>Cash ledger</h2>
             <p className="hint">Cash statement showing deposits, withdrawals, and trade cash movements.</p>
           </div>
-          <strong>Balance: {formatMoney(summary.cashBalance)}</strong>
+          <strong>Balance: {formatMoney(cashLedgerBalance)}</strong>
         </div>
         <div className="ledger-filters">
+          <label>
+            Broker account
+            <select value={ledgerBrokerAccountId} onChange={(event) => setLedgerBrokerAccountId(event.target.value)}>
+              <option value="all">All brokers</option>
+              {brokerAccounts.map((broker) => (
+                <option key={broker.id} value={broker.id}>
+                  {broker.account_name}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             From
             <DateSelector value={ledgerStartDate} onChange={setLedgerStartDate} allowEmpty />
@@ -1138,6 +1398,7 @@ export default function Home() {
               <option value="withdrawal">Withdrawal</option>
               <option value="buy">Buy trade</option>
               <option value="sell">Sell trade</option>
+              <option value="dividend">Cash dividend</option>
             </select>
           </label>
         </div>
@@ -1146,6 +1407,7 @@ export default function Home() {
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Broker</th>
                 <th>Transaction type</th>
                 <th>Description</th>
                 <th>Created by</th>
@@ -1158,7 +1420,8 @@ export default function Home() {
               {filteredCashLedger.length ? filteredCashLedger.map((entry) => (
                 <tr key={entry.id}>
                   <td>{entry.date}</td>
-                  <td className="capitalize">{entry.type === "buy" || entry.type === "sell" ? `${entry.type} trade` : entry.type}</td>
+                  <td>{brokerAccountLabel(entry.brokerAccountId)}</td>
+                  <td className="capitalize">{entry.type === "buy" || entry.type === "sell" ? `${entry.type} trade` : entry.type === "dividend" ? "cash dividend" : entry.type}</td>
                   <td>{entry.description}</td>
                   <td>{entry.createdBy}</td>
                   <td>{entry.debit ? formatMoney(entry.debit) : "—"}</td>
@@ -1166,7 +1429,7 @@ export default function Home() {
                   <td className={tone(entry.runningBalance)}>{formatMoney(entry.runningBalance)}</td>
                 </tr>
               )) : (
-                <tr><td colSpan={7} className="empty">No cash movements match these filters.</td></tr>
+                <tr><td colSpan={8} className="empty">No cash movements match these filters.</td></tr>
               )}
             </tbody>
           </table>

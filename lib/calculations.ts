@@ -1,6 +1,9 @@
 import type {
   CashLedgerEntry,
   CashTransaction,
+  BrokerAccount,
+  BrokerPerformanceSummary,
+  BrokerPortfolioSummary,
   Dividend,
   Member,
   MemberPosition,
@@ -34,12 +37,14 @@ export function buildPortfolioSummary(
   securities: Security[],
   trades: Trade[],
   dividends: Dividend[],
-  cashTransactions: CashTransaction[] = []
+  cashTransactions: CashTransaction[] = [],
+  openingBalance = 0
 ): PortfolioSummary {
   const memberMap = new Map(members.map((member) => [member.id, member]));
   const securityMap = new Map(securities.map((security) => [security.id, security]));
   const lots = new Map<string, RunningLot>();
   const warrantLots = new Map<string, RunningLot>();
+  const warrantCostBasis = new Map<string, number>();
   const dividendTotals = new Map<string, number>();
   const warrantTotals = new Map<string, WarrantHolding>();
   const warrantMeta = new Map<
@@ -67,6 +72,10 @@ export function buildPortfolioSummary(
     const next = { quantity: 0, costBasis: 0, realizedPnL: 0 };
     warrantLots.set(key, next);
     return next;
+  };
+  const getWarrantCostBasis = (warrantCode: string) => warrantCostBasis.get(warrantCode) ?? 0;
+  const setWarrantCostBasis = (warrantCode: string, value: number) => {
+    warrantCostBasis.set(warrantCode, value);
   };
 
   const portfolioEvents = [
@@ -108,10 +117,10 @@ export function buildPortfolioSummary(
           const lot = getWarrantLot(warrantCode, allocation.member_id);
           const allocationRatio = allocation.quantity / trade.quantity;
           const feeShare = money(trade.fees) * allocationRatio;
-
           if (trade.type === "buy") {
             lot.quantity += allocation.quantity;
             lot.costBasis += allocation.quantity * trade.price + feeShare;
+            setWarrantCostBasis(warrantCode, getWarrantCostBasis(warrantCode) + allocation.quantity * trade.price + feeShare);
           } else {
             const sellQuantity = Math.min(allocation.quantity, lot.quantity);
             const averageCost = lot.quantity > 0 ? lot.costBasis / lot.quantity : 0;
@@ -121,6 +130,7 @@ export function buildPortfolioSummary(
             lot.quantity -= sellQuantity;
             lot.costBasis -= releasedCost;
             lot.realizedPnL += proceeds - releasedCost;
+            setWarrantCostBasis(warrantCode, Math.max(0, getWarrantCostBasis(warrantCode) - releasedCost));
 
             if (lot.quantity < 0.000001) {
               lot.quantity = 0;
@@ -199,10 +209,11 @@ export function buildPortfolioSummary(
           exercisePrice,
           marketPrice,
           marketValue: marketPrice == null ? null : warrantQuantity * marketPrice,
-          unrealizedGainLoss: marketPrice == null ? null : warrantQuantity * (marketPrice - exercisePrice),
+          unrealizedGainLoss: marketPrice == null ? null : warrantQuantity * marketPrice,
           expiryDate,
           status
         });
+        setWarrantCostBasis(warrantCode, 0);
       }
       continue;
     }
@@ -376,8 +387,8 @@ export function buildPortfolioSummary(
 
   for (const aggregate of warrantTotals.values()) {
     aggregate.marketValue = aggregate.marketPrice == null ? null : aggregate.quantityHeld * aggregate.marketPrice;
-    aggregate.unrealizedGainLoss =
-      aggregate.marketPrice == null ? null : aggregate.quantityHeld * (aggregate.marketPrice - aggregate.exercisePrice);
+    const costBasis = getWarrantCostBasis(aggregate.warrantCode);
+    aggregate.unrealizedGainLoss = aggregate.marketValue == null ? null : aggregate.marketValue - costBasis;
   }
 
   return {
@@ -390,8 +401,8 @@ export function buildPortfolioSummary(
     warrantHoldings: [...warrantTotals.values()].sort((a, b) => a.warrantCode.localeCompare(b.warrantCode)),
     totalsByMember: [...totalsByMember.values()].sort((a, b) => a.member.name.localeCompare(b.member.name)),
     poolTotals,
-    cashBalance: calculateCashBalance(cashTransactions, trades),
-    portfolioValue: poolTotals.marketValue + calculateCashBalance(cashTransactions, trades)
+    cashBalance: calculateCashBalance(cashTransactions, trades, dividends, openingBalance),
+    portfolioValue: poolTotals.marketValue + calculateCashBalance(cashTransactions, trades, dividends, openingBalance)
   };
 }
 
@@ -400,23 +411,35 @@ export function cashImpactForTrade(trade: Pick<Trade, "type" | "quantity" | "pri
   return trade.type === "buy" ? -(tradeValue + money(trade.fees)) : tradeValue - money(trade.fees);
 }
 
-export function calculateCashBalance(cashTransactions: CashTransaction[], trades: Trade[]) {
+export function calculateCashBalance(
+  cashTransactions: CashTransaction[],
+  trades: Trade[],
+  dividends: Dividend[] = [],
+  openingBalance = 0
+) {
   const manualCash = cashTransactions.reduce(
     (balance, transaction) => balance + (transaction.type === "deposit" ? money(transaction.amount) : -money(transaction.amount)),
     0
   );
-  return manualCash + trades.reduce((balance, trade) => balance + cashImpactForTrade(trade), 0);
+  const dividendCash = dividends.reduce(
+    (balance, dividend) => balance + (dividend.type === "cash" ? money(dividend.gross_amount) - money(dividend.tax) : 0),
+    0
+  );
+  return openingBalance + manualCash + dividendCash + trades.reduce((balance, trade) => balance + cashImpactForTrade(trade), 0);
 }
 
 export function buildCashLedger(
   cashTransactions: CashTransaction[],
   trades: Trade[],
-  securities: Security[]
+  dividends: Dividend[],
+  securities: Security[],
+  openingBalance = 0
 ): CashLedgerEntry[] {
   const securityMap = new Map(securities.map((security) => [security.id, security]));
   const entries = [
     ...cashTransactions.map((transaction): Omit<CashLedgerEntry, "runningBalance"> => ({
       id: `cash:${transaction.id}`,
+      brokerAccountId: transaction.broker_account_id ?? null,
       date: transaction.transaction_date,
       type: transaction.type,
       description: transaction.reference || (transaction.type === "deposit" ? "Cash deposit" : "Cash withdrawal"),
@@ -431,6 +454,7 @@ export function buildCashLedger(
       const instrumentLabel = trade.instrument_type === "warrant" ? "Warrant" : "Stock";
       return {
         id: `trade:${trade.id}`,
+        brokerAccountId: trade.broker_account_id ?? null,
         date: trade.trade_date,
         type: trade.type,
         description: `${isBuy ? "Buy" : "Sell"} ${instrumentLabel} ${trade.quantity} ${trade.instrument_type === "warrant" ? (trade.warrant_code ?? security?.symbol ?? "warrant") : (security?.symbol ?? "counter")}${trade.notes ? ` — ${trade.notes}` : ""}`,
@@ -438,14 +462,91 @@ export function buildCashLedger(
         credit: isBuy ? 0 : amount,
         createdBy: "Trade entry"
       };
-    })
+    }),
+    ...dividends
+      .filter((dividend) => dividend.type === "cash")
+      .map((dividend): Omit<CashLedgerEntry, "runningBalance"> => {
+        const security = securityMap.get(dividend.security_id);
+        return {
+          id: `dividend:${dividend.id}`,
+          brokerAccountId: dividend.broker_account_id ?? null,
+          date: dividend.dividend_date,
+          type: "dividend",
+          description: `Cash dividend ${security?.symbol ?? "counter"}${dividend.notes ? ` — ${dividend.notes}` : ""}`,
+          debit: 0,
+          credit: money(dividend.gross_amount) - money(dividend.tax),
+          createdBy: "Dividend entry"
+        };
+      })
   ].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
 
-  let runningBalance = 0;
+  let runningBalance = openingBalance;
   return entries.map((entry) => {
     runningBalance += entry.credit - entry.debit;
     return { ...entry, runningBalance };
   });
+}
+
+export function buildBrokerPortfolioSummaries(
+  members: Member[],
+  securities: Security[],
+  trades: Trade[],
+  dividends: Dividend[],
+  cashTransactions: CashTransaction[],
+  brokerAccounts: BrokerAccount[]
+): BrokerPortfolioSummary {
+  const unassignedBroker: BrokerAccount = {
+    id: "unassigned",
+    account_name: "Unassigned",
+    broker_type: "Custom",
+    account_number: null,
+    currency: "MYR",
+    opening_balance: 0,
+    status: "Active"
+  };
+
+  const brokers = [...brokerAccounts];
+  if (
+    trades.some((trade) => !trade.broker_account_id) ||
+    dividends.some((dividend) => !dividend.broker_account_id) ||
+    cashTransactions.some((transaction) => !transaction.broker_account_id) ||
+    brokers.length === 0
+  ) {
+    brokers.unshift(unassignedBroker);
+  }
+
+  const matchBroker = <T extends { broker_account_id: string | null }>(items: T[], brokerId: string) =>
+    items.filter((item) => (item.broker_account_id ?? "unassigned") === brokerId);
+
+  const brokerSummaries: BrokerPerformanceSummary[] = brokers.map((brokerAccount) => {
+    const openingBalance = money(brokerAccount.opening_balance);
+    const brokerTrades = matchBroker(trades, brokerAccount.id);
+    const brokerDividends = matchBroker(dividends, brokerAccount.id);
+    const brokerCash = matchBroker(cashTransactions, brokerAccount.id);
+    const summary = buildPortfolioSummary(members, securities, brokerTrades, brokerDividends, brokerCash, openingBalance);
+    const totalInvested = summary.poolTotals.costBasis;
+    const holdingsValue = summary.poolTotals.marketValue;
+    const realizedPnL = summary.poolTotals.realizedPnL;
+    const unrealizedPnL = summary.poolTotals.unrealizedPnL;
+    const totalReturn = summary.poolTotals.totalPnLIncludingDividends;
+    const totalReturnPct = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0;
+
+    return {
+      brokerAccount,
+      summary,
+      totalInvested,
+      holdingsValue,
+      realizedPnL,
+      unrealizedPnL,
+      totalReturn,
+      totalReturnPct
+    };
+  }).sort((a, b) => a.brokerAccount.account_name.localeCompare(b.brokerAccount.account_name));
+
+  const consolidatedOpeningBalance = brokerAccounts.reduce((sum, brokerAccount) => sum + money(brokerAccount.opening_balance), 0);
+  const consolidated = buildPortfolioSummary(members, securities, trades, dividends, cashTransactions, consolidatedOpeningBalance);
+
+  return { consolidated, brokerSummaries };
 }
 
 export function formatMoney(value: number, currency = "MYR", minimumFractionDigits = 2, maximumFractionDigits = 2) {

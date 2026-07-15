@@ -17,6 +17,17 @@ export type Security = {
   created_at?: string;
 };
 
+export type BrokerAccount = {
+  id: string;
+  account_name: string;
+  broker_type: "Webull" | "Moomoo" | "IBKR" | "Tiger" | "Custom" | string;
+  account_number: string | null;
+  currency: Currency;
+  opening_balance: number;
+  status: "Active" | "Inactive";
+  created_at?: string;
+};
+
 export type Allocation = {
   member_id: string;
   quantity: number;
@@ -29,6 +40,7 @@ export type DividendAllocation = {
 
 export type Trade = {
   id: string;
+  broker_account_id: string | null;
   security_id: string;
   trade_date: string;
   instrument_type: "stock" | "warrant";
@@ -44,6 +56,7 @@ export type Trade = {
 
 export type Dividend = {
   id: string;
+  broker_account_id: string | null;
   security_id: string;
   dividend_date: string;
   type: "cash" | "bonus_issue" | "warrant_bonus";
@@ -62,6 +75,7 @@ export type Dividend = {
 
 export type CashTransaction = {
   id: string;
+  broker_account_id: string | null;
   transaction_date: string;
   type: "deposit" | "withdrawal";
   amount: number;
@@ -72,8 +86,9 @@ export type CashTransaction = {
 
 export type CashLedgerEntry = {
   id: string;
+  brokerAccountId: string | null;
   date: string;
-  type: "deposit" | "withdrawal" | "buy" | "sell";
+  type: "deposit" | "withdrawal" | "buy" | "sell" | "dividend";
   description: string;
   debit: number;
   credit: number;
@@ -145,4 +160,20 @@ export type PortfolioSummary = {
   };
   cashBalance: number;
   portfolioValue: number;
+};
+
+export type BrokerPerformanceSummary = {
+  brokerAccount: BrokerAccount;
+  summary: PortfolioSummary;
+  totalInvested: number;
+  holdingsValue: number;
+  realizedPnL: number;
+  unrealizedPnL: number;
+  totalReturn: number;
+  totalReturnPct: number;
+};
+
+export type BrokerPortfolioSummary = {
+  consolidated: PortfolioSummary;
+  brokerSummaries: BrokerPerformanceSummary[];
 };
