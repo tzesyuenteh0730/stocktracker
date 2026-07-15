@@ -445,15 +445,21 @@ export default function Home() {
       type: dividendType,
       gross_amount: dividendType === "warrant_bonus" ? warrantShares : bonusShares,
       tax: dividendType === "bonus_issue" || dividendType === "warrant_bonus" ? 0 : numeric(dividendTax),
-      warrant_code: dividendType === "warrant_bonus" ? warrantCode.trim() : null,
-      bonus_ratio: dividendType === "warrant_bonus" ? warrantBonusRatio.trim() : null,
-      warrant_quantity_received: dividendType === "warrant_bonus" ? warrantShares : null,
-      exercise_price: dividendType === "warrant_bonus" ? warrantPrice : null,
-      market_price: dividendType === "warrant_bonus" ? numeric(warrantMarketPrice) || null : null,
-      expiry_date: dividendType === "warrant_bonus" ? warrantExpiryDate || null : null,
       allocations,
       notes: dividendNotes.trim() || null
     };
+
+    if (dividendType === "warrant_bonus") {
+      Object.assign(dividend, {
+        warrant_code: warrantCode.trim(),
+        bonus_ratio: warrantBonusRatio.trim(),
+        warrant_quantity_received: warrantShares,
+        exercise_price: warrantPrice,
+        ...(warrantMarketPrice.trim() ? { market_price: numeric(warrantMarketPrice) } : {}),
+        ...(warrantExpiryDate ? { expiry_date: warrantExpiryDate } : {})
+      });
+    }
+
     const { error } = editingDividendId
       ? await supabase.from("dividends").update(dividend).eq("id", editingDividendId)
       : await supabase.from("dividends").insert(dividend);
