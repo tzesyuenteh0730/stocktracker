@@ -1435,6 +1435,211 @@ export default function Home() {
           </table>
         </div>
       </section>
+
+      {editingTradeId ? (
+        <div className="modal-overlay" role="presentation" onClick={resetTradeForm}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="trade-edit-title" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h2 id="trade-edit-title">Edit stock trade</h2>
+              <button type="button" className="secondary small" onClick={resetTradeForm}>Close</button>
+            </div>
+            <form className="panel modal-panel" onSubmit={saveTrade}>
+              <div className="row">
+                <label>
+                  Broker account
+                  <select value={tradeBrokerAccountId} onChange={(event) => setTradeBrokerAccountId(event.target.value)}>
+                    <option value="">Select</option>
+                    {brokerAccounts.map((broker) => (
+                      <option key={broker.id} value={broker.id}>
+                        {broker.account_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Counter
+                  <select value={tradeSecurityId} onChange={(event) => setTradeSecurityId(event.target.value)}>
+                    <option value="">Select</option>
+                    {securities.map((security) => (
+                      <option key={security.id} value={security.id}>
+                        {security.symbol}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="row">
+                <label>
+                  Type
+                  <select value={tradeType} onChange={(event) => setTradeType(event.target.value as "buy" | "sell")}>
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                  </select>
+                </label>
+                <label>
+                  Date
+                  <DateSelector value={tradeDate} onChange={setTradeDate} />
+                </label>
+              </div>
+              <div className="row">
+                <label>
+                  Quantity
+                  <input inputMode="decimal" value={tradeQuantity} onChange={(event) => setTradeQuantity(event.target.value)} />
+                </label>
+                <label>
+                  Price
+                  <input inputMode="decimal" value={tradePrice} onChange={(event) => setTradePrice(event.target.value)} />
+                </label>
+              </div>
+              <div className="row">
+                <label>
+                  Fees
+                  <input inputMode="decimal" value={tradeFees} onChange={(event) => setTradeFees(event.target.value)} />
+                </label>
+                <div />
+              </div>
+              <AllocationInputs
+                members={members}
+                values={tradeAllocations}
+                setValues={setTradeAllocations}
+                label="Member quantity"
+                onEvenSplit={splitTradeEvenly}
+              />
+              <label>
+                Notes
+                <input value={tradeNotes} onChange={(event) => setTradeNotes(event.target.value)} placeholder="Optional" />
+              </label>
+              <div className="form-actions">
+                <button type="submit">Update stock trade</button>
+                <button type="button" className="secondary" onClick={resetTradeForm}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {editingDividendId ? (
+        <div className="modal-overlay" role="presentation" onClick={resetDividendForm}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="dividend-edit-title" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h2 id="dividend-edit-title">Edit dividend</h2>
+              <button type="button" className="secondary small" onClick={resetDividendForm}>Close</button>
+            </div>
+            <form className="panel modal-panel" onSubmit={saveDividend}>
+              <div className="row">
+                <label>
+                  Broker account
+                  <select value={dividendBrokerAccountId} onChange={(event) => setDividendBrokerAccountId(event.target.value)}>
+                    <option value="">Select</option>
+                    {brokerAccounts.map((broker) => (
+                      <option key={broker.id} value={broker.id}>
+                        {broker.account_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Counter
+                  <select value={dividendSecurityId} onChange={(event) => setDividendSecurityId(event.target.value)}>
+                    <option value="">Select</option>
+                    {securities.map((security) => (
+                      <option key={security.id} value={security.id}>
+                        {security.symbol}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="row">
+                <label>
+                  {dividendType === "warrant_bonus" ? "Effective date" : "Date"}
+                  <DateSelector value={dividendDate} onChange={setDividendDate} />
+                </label>
+                <label>
+                  Dividend type
+                  <select value={dividendType} onChange={(event) => setDividendType(event.target.value as Dividend["type"])}>
+                    <option value="cash">Cash dividend</option>
+                    <option value="bonus_issue">Bonus issue</option>
+                    <option value="warrant_bonus">Warrant bonus</option>
+                  </select>
+                </label>
+              </div>
+              {dividendType === "bonus_issue" ? (
+                <label>
+                  Bonus shares to issue
+                  <input
+                    inputMode="decimal"
+                    value={grossDividend}
+                    onChange={(event) => setGrossDividend(event.target.value)}
+                    placeholder="1000"
+                  />
+                </label>
+              ) : dividendType === "warrant_bonus" ? (
+                <>
+                  <div className="row">
+                    <label>
+                      Warrant code
+                      <input value={warrantCode} onChange={(event) => setWarrantCode(event.target.value)} placeholder="WA_ABC" />
+                    </label>
+                    <label>
+                      Bonus ratio
+                      <input value={warrantBonusRatio} onChange={(event) => setWarrantBonusRatio(event.target.value)} placeholder="1:2" />
+                    </label>
+                  </div>
+                  <div className="row">
+                    <label>
+                      Warrant quantity received
+                      <input inputMode="decimal" value={warrantQuantityReceived} onChange={(event) => setWarrantQuantityReceived(event.target.value)} placeholder="5000" />
+                    </label>
+                    <label>
+                      Exercise price
+                      <input inputMode="decimal" value={warrantExercisePrice} onChange={(event) => setWarrantExercisePrice(event.target.value)} placeholder="0.5000" />
+                    </label>
+                  </div>
+                  <div className="row">
+                    <label>
+                      Market price
+                      <input inputMode="decimal" value={warrantMarketPrice} onChange={(event) => setWarrantMarketPrice(event.target.value)} placeholder="0.6000" />
+                    </label>
+                    <label>
+                      Expiry date
+                      <DateSelector value={warrantExpiryDate} onChange={setWarrantExpiryDate} allowEmpty />
+                    </label>
+                  </div>
+                </>
+              ) : (
+                <div className="row">
+                  <label>
+                    Gross dividend
+                    <input inputMode="decimal" value={grossDividend} onChange={(event) => setGrossDividend(event.target.value)} />
+                  </label>
+                  <label>
+                    Tax
+                    <input inputMode="decimal" value={dividendTax} onChange={(event) => setDividendTax(event.target.value)} />
+                  </label>
+                </div>
+              )}
+              {dividendType === "cash" ? (
+                <AllocationInputs
+                  members={members}
+                  values={dividendAllocations}
+                  setValues={setDividendAllocations}
+                  label="Member net amount"
+                  onEvenSplit={splitDividendEvenly}
+                />
+              ) : null}
+              <label>
+                {dividendType === "warrant_bonus" ? "Remarks" : "Notes"}
+                <input value={dividendNotes} onChange={(event) => setDividendNotes(event.target.value)} placeholder="Optional" />
+              </label>
+              <div className="form-actions">
+                <button type="submit">Update dividend</button>
+                <button type="button" className="secondary" onClick={resetDividendForm}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
