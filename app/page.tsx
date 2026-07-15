@@ -293,19 +293,17 @@ export default function Home() {
     const trade = {
       security_id: tradeSecurityId,
       trade_date: tradeDate,
-      instrument_type: "stock" as const,
       type: tradeType,
       quantity,
       price: numeric(tradePrice),
       fees: numeric(tradeFees),
-      warrant_code: null,
       allocations,
       notes: tradeNotes.trim() || null
     };
 
     const { error } = editingTradeId
       ? await supabase.from("trades").update(trade).eq("id", editingTradeId)
-      : await supabase.from("trades").insert(trade);
+      : await supabase.from("trades").insert({ ...trade, instrument_type: "stock" as const });
 
     if (error) return setMessage(error.message);
     resetTradeForm();
